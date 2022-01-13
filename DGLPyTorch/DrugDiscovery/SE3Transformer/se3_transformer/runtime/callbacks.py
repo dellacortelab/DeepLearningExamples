@@ -30,7 +30,7 @@ import numpy as np
 import torch
 
 from se3_transformer.runtime.loggers import Logger
-from se3_transformer.runtime.metrics import MeanAbsoluteError
+from se3_transformer.runtime.metrics import ANI1xMeanAbsoluteError, ANI1xRootMeanSquaredError
 
 
 class BaseCallback(ABC):
@@ -59,6 +59,39 @@ class BaseCallback(ABC):
         pass
 
 
+class ANI1xMetricCallback(BaseCallback):
+    """ Logs the recaled MAE and RMSE for ANI1x regression """
+
+    def __init__(self, logger, targets_std, prefix=''):
+        self.mae = ANI1xMeanAbsoluteError()
+        self.rmse = ANI1xRootMeanSquaredError()
+        self.logger = logger
+        self.targets_std = targets_std
+        self.prefix = prefix
+        self.best_mae = float('inf')
+        self.best_rmse = float('inf')
+
+    def on_validation_step(self, inputs, targets, pred):
+        self.rmse(pred.detatch(), target.detach())
+        self.mae(pred.detatch(), target.detach())
+
+    def on_validation_end(self, epoch=None):
+        mae = self.mae.compute() * self.targets_std
+        rmse = self.rmse.compute() * self.targets_std
+        logging.info(f'{self.prefix} MAE: {mae}')
+        logging.info(f'{self.prefix} RMSE: {rmse}')
+        self.logger.log_metrics({f'{self.prefix} MAE': mae,
+                                 f'{self.prefix} RMSE': rmse}, epoch)
+        self.best_mae = min(self.best_mae, mae)
+        self.best_rmse = min(self.best_rmse, rmse) 
+
+    def on_fit_end(self):
+        if self.best_mae != float('inf'):
+            self.logger.log_metrics({f'{self.prefix} best MAE': self.best_mae})
+        if self.best_rmse != float('inf'):
+            self. logger.log_metrics({f'{self.prefix} best RMSE': self.best_rmse})
+
+
 class LRSchedulerCallback(BaseCallback):
     def __init__(self, logger: Optional[Logger] = None):
         self.logger = logger
@@ -83,31 +116,7 @@ class LRSchedulerCallback(BaseCallback):
         self.scheduler.step()
 
 
-class QM9MetricCallback(BaseCallback):
-    """ Logs the rescaled mean absolute error for QM9 regression tasks """
-
-    def __init__(self, logger, targets_std, prefix=''):
-        self.mae = MeanAbsoluteError()
-        self.logger = logger
-        self.targets_std = targets_std
-        self.prefix = prefix
-        self.best_mae = float('inf')
-
-    def on_validation_step(self, input, target, pred):
-        self.mae(pred.detach(), target.detach())
-
-    def on_validation_end(self, epoch=None):
-        mae = self.mae.compute() * self.targets_std
-        logging.info(f'{self.prefix} MAE: {mae}')
-        self.logger.log_metrics({f'{self.prefix} MAE': mae}, epoch)
-        self.best_mae = min(self.best_mae, mae)
-
-    def on_fit_end(self):
-        if self.best_mae != float('inf'):
-            self.logger.log_metrics({f'{self.prefix} best MAE': self.best_mae})
-
-
-class QM9LRSchedulerCallback(LRSchedulerCallback):
+class ANI1xLRSchedulerCallback(LRSchedulerCallback):
     def __init__(self, logger, epochs):
         super().__init__(logger)
         self.epochs = epochs

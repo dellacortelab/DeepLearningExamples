@@ -36,12 +36,12 @@ from torch.optim import Optimizer
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
-from se3_transformer.data_loading import QM9DataModule
-from se3_transformer.model import SE3TransformerPooled
+from se3_transformer.data_loading import ANI1xDataModule
+from se3_transformer.model import SE3Transformer
 from se3_transformer.model.fiber import Fiber
 from se3_transformer.runtime import gpu_affinity
 from se3_transformer.runtime.arguments import PARSER
-from se3_transformer.runtime.callbacks import QM9MetricCallback, QM9LRSchedulerCallback, BaseCallback, \
+from se3_transformer.runtime.callbacks import ANI1xMetricCallback, ANI1xLRSchedulerCallback, BaseCallback, \
     PerformanceCallback
 from se3_transformer.runtime.inference import evaluate
 from se3_transformer.runtime.loggers import LoggerCollection, DLLogger, WandbLogger, Logger
@@ -202,27 +202,28 @@ if __name__ == '__main__':
 
     loggers = [DLLogger(save_dir=args.log_dir, filename=args.dllogger_name)]
     if args.wandb:
-        loggers.append(WandbLogger(name=f'QM9({args.task})', save_dir=args.log_dir, project='se3-transformer'))
+        loggers.append(WandbLogger(name=f'ANI1x', save_dir=args.log_dir, project='se3-transformer'))
     logger = LoggerCollection(loggers)
 
-    datamodule = QM9DataModule(**vars(args))
-    model = SE3TransformerPooled(
+    datamodule = ANI1xDataModule(**vars(args))
+    model = SE3Transformer(
         fiber_in=Fiber({0: datamodule.NODE_FEATURE_DIM}),
-        fiber_out=Fiber({0: args.num_degrees * args.num_channels}),
+        fiber_hidden=Fiber.create(args.num_degrees, args.num_channels),
+        fiber_out=Fiber({0: 1, 1: 1}),
         fiber_edge=Fiber({0: datamodule.EDGE_FEATURE_DIM}),
-        output_dim=1,
         tensor_cores=using_tensor_cores(args.amp),  # use Tensor Cores more effectively
         **vars(args)
     )
-    loss_fn = nn.L1Loss()
+    loss_fn = datamodule.loss_fn
 
     if args.benchmark:
         logging.info('Running benchmark mode')
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         callbacks = [PerformanceCallback(logger, args.batch_size * world_size)]
     else:
-        callbacks = [QM9MetricCallback(logger, targets_std=datamodule.targets_std, prefix='validation'),
-                     QM9LRSchedulerCallback(logger, epochs=args.epochs)]
+        callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.energy_std, prefix='energy validation'),
+                     ANI1xMetricCallback(logger, targets_std=datamodule.force_std, prefix='force validation'),
+                     ANI1xLRSchedulerCallback(logger, epochs=args.epochs)]
 
     if is_distributed:
         gpu_affinity.set_affinity(gpu_id=get_local_rank(), nproc_per_node=torch.cuda.device_count())
