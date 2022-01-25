@@ -31,6 +31,7 @@ class ANI1xDataModule(DataModule):
                  **kwargs):
         self.data_dir = data_dir # This needs to be before __init__ so that prepare_data has access to it
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate)
+        self.load_data()
         self.amp = amp
         self.batch_size = batch_size
         self.num_degrees = num_degrees 
@@ -43,7 +44,7 @@ class ANI1xDataModule(DataModule):
         self.energy_std = 0.1062
         self.force_std = 0.0709
 
-    def prepare_data(self):
+    def load_data(self):
         species_list = []
         pos_list = []
         forces_list = []
@@ -150,8 +151,8 @@ class ANI1xDataModule(DataModule):
 
     @staticmethod
     def get_bound_idx(energy_targets):
-        bound_idx = torch.where(energy_targets[:-1] != energy_targets[1:])[0]
-        last = torch.tensor([len(energy_targets), device=bound_idx.device])
+        bound_idx = torch.where(energy_targets[:-1] != energy_targets[1:])[0] + 1
+        last = torch.tensor([len(energy_targets)], device=bound_idx.device)
         bound_idx = torch.cat([bound_idx, last])
         return bound_idx
 
@@ -160,8 +161,7 @@ class ANI1xDataModule(DataModule):
         bound_idx = ANI1xDataModule.get_bound_idx(target['0'])
         energy_loss = ANI1xDataModule.energy_loss_fn(pred['0'], target['0'], bound_idx)
         force_loss = ANI1xDataModule.force_loss_fn(pred['1'], target['1'], bound_idx)
-        loss = energy_loss + force_loss
-        return loss
+        return energy_loss, force_loss
 
     @staticmethod
     def energy_loss_fn(pred, target, bound_idx):
@@ -217,6 +217,12 @@ class ANI1xDataset(Dataset):
         self.energy_std = 0.1062
         self.force_std = 0.0709
 
+        self.si_energies = torch.tensor([
+            -0.600952980000,
+            -38.08316124000,
+            -54.70775770000,
+            -75.19446356000])
+
     def __len__(self):
         return len(self.pos_list)
 
@@ -236,10 +242,12 @@ class ANI1xDataset(Dataset):
 
         # Create targets
         if self.normalize:
+            adjustment = torch.sum(self.si_energies[None,:] * species)
+            energy = energy - adjustment
             energy = (energy - self.energy_mean)/self.energy_std
             forces = forces/self.force_std
         energy = torch.ones(len(pos)) * energy
-        forces = torch.tensor(forces)
+        forces = torch.tensor(forces).unsqueeze(-2)
         targets = {'0': energy,
                    '1': forces}
 

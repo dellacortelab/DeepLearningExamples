@@ -90,13 +90,12 @@ class ANI1xMeanAbsoluteError(Metric):
 
     def update(self, preds: Tensor, targets: Tensor):
         preds = preds.detach()
-        n = preds.shape[0]
-        error = torch.abs(preds.view(n, -1) - targets.view(n, -1)).sum()
+        abs_error = torch.sum(torch.abs(preds - targets))
         self.total += n
-        self.error += error
+        self.abs_error += abs_error
 
     def _compute(self):
-        return self.error / self.total
+        return 627.5 * self.abs_error / self.total
 
 class ANI1xRootMeanSquaredError(Metric):
     def __init__(self):
@@ -106,10 +105,9 @@ class ANI1xRootMeanSquaredError(Metric):
 
     def update(self, preds: Tensor, targets: Tensor):
         preds = preds.detach()
-        n = preds.shape[0]
-        sq_error = (preds.view(n, -1) - targets.view(n, -1)).sum()
+        sq_error = torch.sum((preds - targets)**2)
         self.total += n
         self.sq_error += sq_error
 
     def _compute(self):
-        return torch.sqrt(self.sq_error / self.total)
+        return 627.5 * torch.sqrt(self.sq_error / self.total)

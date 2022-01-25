@@ -29,7 +29,8 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from apex.optimizers import FusedAdam, FusedLAMB
+#from apex.optimizers import FusedAdam, FusedLAMB
+from torch.optim import Adam as FusedAdam
 from torch.nn.modules.loss import _Loss
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
@@ -82,7 +83,8 @@ def load_state(model: nn.Module, optimizer: Optimizer, path: pathlib.Path, callb
 
 
 def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimizer, local_rank, callbacks, args):
-    losses = []
+    energy_losses = []
+    force_losses = []
     for i, batch in tqdm(enumerate(train_dataloader), total=len(train_dataloader), unit='batch',
                          desc=f'Epoch {epoch_idx}', disable=(args.silent or local_rank != 0)):
         *inputs, target = to_cuda(batch)
@@ -92,8 +94,10 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
 
         with torch.cuda.amp.autocast(enabled=args.amp):
             pred = model(*inputs)
-            loss = loss_fn(pred, target) / args.accumulate_grad_batches
-
+            energy_loss, force_loss = loss_fn(pred, target)
+            energy_loss /= args.accumulate_grad_batches
+            force_loss /= args.accumulate_grad_batches
+            loss = energy_loss + force_loss
         grad_scaler.scale(loss).backward()
 
         # gradient accumulation
@@ -106,9 +110,10 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
             grad_scaler.update()
             model.zero_grad(set_to_none=True)
 
-        losses.append(loss.item())
+        energy_losses.append(energy_loss.item())
+        force_losses.append(force_loss.item())
 
-    return np.mean(losses)
+    return np.mean(energy_losses), np.mean(force_losses)
 
 
 def train(model: nn.Module,
@@ -148,15 +153,22 @@ def train(model: nn.Module,
         if isinstance(train_dataloader.sampler, DistributedSampler):
             train_dataloader.sampler.set_epoch(epoch_idx)
 
-        loss = train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimizer, local_rank, callbacks,
+        energy_loss, force_loss = train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimizer, local_rank, callbacks,
                            args)
         if dist.is_initialized():
-            loss = torch.tensor(loss, dtype=torch.float, device=device)
-            torch.distributed.all_reduce(loss)
-            loss = (loss / world_size).item()
+            energy_loss = torch.tensor(energy_loss, dtype=torch.float, device=device)
+            torch.distributed.all_reduce(energy_loss)
+            energy_loss = (energy_loss / world_size).item()
+            force_loss = torch.tensor(force_loss, dtype=torch.float, device=device)
+            torch.distributed.all_reduce(force_loss)
+            force_loss = (force_loss / world_size).item()
 
-        logging.info(f'Train loss: {loss}')
-        logger.log_metrics({'train loss': loss}, epoch_idx)
+        energy_error = np.sqrt(energy_loss) / 0.1062 * 627.5
+        force_error = np.sqrt(force_loss) / 0.0709 * 627.5
+
+        logging.info(f'Energy error: {energy_error}')
+        logging.info(f'Force error: {force_error}')
+        logger.log_metrics({'train error': (energy_error, force_error)}, epoch_idx)
 
         for callback in callbacks:
             callback.on_epoch_end()

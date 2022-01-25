@@ -71,9 +71,29 @@ class ANI1xMetricCallback(BaseCallback):
         self.best_mae = float('inf')
         self.best_rmse = float('inf')
 
-    def on_validation_step(self, inputs, targets, pred):
-        self.rmse(pred.detatch(), target.detach())
-        self.mae(pred.detatch(), target.detach())
+    def on_validation_step(self, inputs, targets, preds):
+        if self.prefix == 'energy validation':
+            key = '0'
+        elif self.prefix == 'force validation':
+            key = '1'
+        bound_idx = self.get_bound_idx(targets['0'])
+        start = 0
+        for i, stop in enumerate(bound_idx):
+            if key == '0':
+                pred = torch.sum(preds['0'][start:stop])
+                target = targets['0'][start]
+            elif key == '1':
+                pred = preds['1'][start:stop]
+                target = targets['1'][start:stop]
+            self.rmse(pred.detach(), target.detach())
+            self.mae(pred.detach(), target.detach())
+
+    @staticmethod
+    def get_bound_idx(energy_targets):
+        bound_idx = torch.where(energy_targets[:-1] != energy_targets[1:])[0] + 1
+        last = torch.tensor([len(energy_targets)], device=bound_idx.device)
+        bound_idx = torch.cat([bound_idx, last])
+        return bound_idx
 
     def on_validation_end(self, epoch=None):
         mae = self.mae.compute() * self.targets_std
