@@ -85,17 +85,17 @@ class MeanAbsoluteError(Metric):
 class ANI1xMeanAbsoluteError(Metric):
     def __init__(self):
         super().__init__()
-        self.add_state('error', torch.tensor(0, dtype=torch.float32, device='cuda'))
+        self.add_state('abs_error', torch.tensor(0, dtype=torch.float32, device='cuda'))
         self.add_state('total', torch.tensor(0, dtype=torch.int32, device='cuda'))
 
     def update(self, preds: Tensor, targets: Tensor):
         preds = preds.detach()
         abs_error = torch.sum(torch.abs(preds - targets))
-        self.total += n
+        self.total += 1
         self.abs_error += abs_error
 
     def _compute(self):
-        return 627.5 * self.abs_error / self.total
+        return self.abs_error / self.total
 
 class ANI1xRootMeanSquaredError(Metric):
     def __init__(self):
@@ -106,8 +106,8 @@ class ANI1xRootMeanSquaredError(Metric):
     def update(self, preds: Tensor, targets: Tensor):
         preds = preds.detach()
         sq_error = torch.sum((preds - targets)**2)
-        self.total += n
+        self.total += 1
         self.sq_error += sq_error
 
     def _compute(self):
-        return 627.5 * torch.sqrt(self.sq_error / self.total)
+        return torch.sqrt(self.sq_error / self.total)

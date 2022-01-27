@@ -46,7 +46,7 @@ class BaseCallback(ABC):
     def on_batch_start(self):
         pass
 
-    def on_validation_step(self, input, target, pred):
+    def on_validation_step(self, input, target, pred, end_tensor):
         pass
 
     def on_validation_end(self, epoch=None):
@@ -71,20 +71,15 @@ class ANI1xMetricCallback(BaseCallback):
         self.best_mae = float('inf')
         self.best_rmse = float('inf')
 
-    def on_validation_step(self, inputs, targets, preds):
-        if self.prefix == 'energy validation':
-            key = '0'
-        elif self.prefix == 'force validation':
-            key = '1'
-        bound_idx = self.get_bound_idx(targets['0'])
+    def on_validation_step(self, inputs, targets, preds, end_tensor):
         start = 0
-        for i, stop in enumerate(bound_idx):
-            if key == '0':
+        for i, stop in enumerate(end_tensor):
+            if self.prefix == 'energy validation':
                 pred = torch.sum(preds['0'][start:stop])
-                target = targets['0'][start]
-            elif key == '1':
-                pred = preds['1'][start:stop]
-                target = targets['1'][start:stop]
+                target = targets['energy'][i]
+            elif self.prefix == 'forces validation':
+                pred = preds['1'][start:stop, 0, :]
+                target = targets['forces'][start:stop]
             self.rmse(pred.detach(), target.detach())
             self.mae(pred.detach(), target.detach())
 
@@ -96,8 +91,8 @@ class ANI1xMetricCallback(BaseCallback):
         return bound_idx
 
     def on_validation_end(self, epoch=None):
-        mae = self.mae.compute() * self.targets_std
-        rmse = self.rmse.compute() * self.targets_std
+        mae = self.mae.compute() * self.targets_std * 627.5
+        rmse = self.rmse.compute() * self.targets_std * 627.5
         logging.info(f'{self.prefix} MAE: {mae}')
         logging.info(f'{self.prefix} RMSE: {rmse}')
         self.logger.log_metrics({f'{self.prefix} MAE': mae,

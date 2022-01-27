@@ -4,7 +4,7 @@
 BATCH_SIZE=${1:-100}
 AMP=${2:-false}
 NUM_EPOCHS=${3:-100}
-LEARNING_RATE=${4:-0.001}
+LEARNING_RATE=${4:-0.0001}
 WEIGHT_DECAY=${5:-0.1}
 
 python -m se3_transformer.runtime.training \

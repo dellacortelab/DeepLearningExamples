@@ -44,7 +44,7 @@ def evaluate(model: nn.Module,
     model.eval()
     for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), unit='batch', desc=f'Evaluation',
                          leave=False, disable=(args.silent or get_local_rank() != 0)):
-        *input, target = to_cuda(batch)
+        *input, target, end_tensor = to_cuda(batch)
 
         for callback in callbacks:
             callback.on_batch_start()
@@ -53,7 +53,7 @@ def evaluate(model: nn.Module,
             pred = model(*input)
 
             for callback in callbacks:
-                callback.on_validation_step(input, target, pred)
+                callback.on_validation_step(input, target, pred, end_tensor)
 
 
 if __name__ == '__main__':

@@ -15,11 +15,21 @@ from se3_transformer.data_loading.data_module import DataModule
 from se3_transformer.model.basis import get_basis
 from se3_transformer.runtime.utils import get_local_rank, str2bool, using_tensor_cores
 
+SI_ENERGIES = torch.tensor([
+            -0.600952980000,
+            -38.08316124000,
+            -54.70775770000,
+            -75.19446356000])
+ENERGY_MEAN = 0.0184
+ENERGY_STD = 0.1062
+FORCES_STD = 0.0709
 
 class ANI1xDataModule(DataModule):
     NODE_FEATURE_DIM = 4
     EDGE_FEATURE_DIM = 0
 
+    ENERGY_STD = ENERGY_STD
+    FORCES_STD = FORCES_STD
     def __init__(self,
                  data_dir: pathlib.Path,
                  batch_size: int = 256,
@@ -31,18 +41,14 @@ class ANI1xDataModule(DataModule):
                  **kwargs):
         self.data_dir = data_dir # This needs to be before __init__ so that prepare_data has access to it
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate)
-        self.load_data()
         self.amp = amp
         self.batch_size = batch_size
         self.num_degrees = num_degrees 
 
+        self.load_data()
         self.ds_train = self.get_dataset(mode='train', knn=knn)
         self.ds_val = self.get_dataset(mode='validation', knn=knn)
         self.ds_test = self.get_dataset(mode='test', knn=knn)
-
-        self.energy_mean = 0.0184
-        self.energy_std = 0.1062
-        self.force_std = 0.0709
 
     def load_data(self):
         species_list = []
@@ -61,7 +67,7 @@ class ANI1xDataModule(DataModule):
                 energy_list.append(energy)
                 forces_list.append(forces)
                 num_list.append(num)
-        
+
         self.species_list = species_list
         self.pos_list = pos_list
         self.forces_list = forces_list
@@ -106,7 +112,7 @@ class ANI1xDataModule(DataModule):
         ds_forces_list = []
 
         for pos, species, energy, forces, num in zip(self.pos_list, self.species_list, self.energy_list, self.forces_list, self.num_list):
-            if num%20 in idx:
+            if num % 20 in idx:
                 ds_pos_list.append(pos)
                 ds_species_list.append(species)
                 ds_energy_list.append(energy) 
@@ -123,16 +129,17 @@ class ANI1xDataModule(DataModule):
         species = torch.cat([node_feats['0'] for node_feats in node_feats_list])
         node_feats = {'0': species}
 
-        # edge feats
-        edge_feats = {}
-
         # targets
-        energy = torch.cat([targets['0'] for targets in targets_list])
-        forces = torch.cat([targets['1'] for targets in targets_list])
-        targets = {'0': energy,
-                   '1': forces}
+        energy = torch.tensor([targets['energy'] for targets in targets_list])
+        forces = torch.cat([targets['forces'] for targets in targets_list])
+        targets = {'energy': energy,
+                   'forces': forces}
 
-        return batched_graph, node_feats, edge_feats, targets
+        # ends of targets
+        len_tensor = torch.tensor([len(targets['forces']) for targets in targets_list])
+        end_tensor = torch.cumsum(len_tensor, 0)
+
+        return batched_graph, node_feats, targets, end_tensor
 
     @staticmethod
     def add_argparse_args(parent_parser):
@@ -150,54 +157,28 @@ class ANI1xDataModule(DataModule):
         return 'ANI1x'
 
     @staticmethod
-    def get_bound_idx(energy_targets):
-        bound_idx = torch.where(energy_targets[:-1] != energy_targets[1:])[0] + 1
-        last = torch.tensor([len(energy_targets)], device=bound_idx.device)
-        bound_idx = torch.cat([bound_idx, last])
-        return bound_idx
+    def loss_fn(pred, target, end_tensor):
+        energy_loss = ANI1xDataModule.energy_loss_fn(pred['0'], target['energy'], end_tensor)
+        forces_loss = ANI1xDataModule.forces_loss_fn(pred['1'][:,0,:], target['forces'], end_tensor)
+        return energy_loss, forces_loss
 
     @staticmethod
-    def loss_fn(pred, target):
-        bound_idx = ANI1xDataModule.get_bound_idx(target['0'])
-        energy_loss = ANI1xDataModule.energy_loss_fn(pred['0'], target['0'], bound_idx)
-        force_loss = ANI1xDataModule.force_loss_fn(pred['1'], target['1'], bound_idx)
-        return energy_loss, force_loss
-
-    @staticmethod
-    def energy_loss_fn(pred, target, bound_idx):
+    def energy_loss_fn(pred, target, end_tensor):
         start = 0
-        energy_losses = torch.zeros(len(bound_idx), device=pred.device)
-        for i, stop in enumerate(bound_idx):
-            energy_losses[i] = F.mse_loss(torch.sum(pred[start:stop]), target[start])
+        energy_losses = torch.zeros(len(end_tensor), device=pred.device)
+        for i, stop in enumerate(end_tensor):
+            energy_losses[i] = F.mse_loss(torch.sum(pred[start:stop]), target[i])
             start = stop
         return torch.mean(energy_losses)
 
     @staticmethod
-    def force_loss_fn(pred, target, bound_idx):
+    def forces_loss_fn(pred, target, end_tensor):
         start = 0
-        force_losses = torch.zeros(len(bound_idx), device=pred.device)
-        for i, stop in enumerate(bound_idx):
-            force_losses[i] = F.mse_loss(pred[start:stop], target[start:stop])
+        forces_losses = torch.zeros(len(end_tensor), device=pred.device)
+        for i, stop in enumerate(end_tensor):
+            forces_losses[i] = F.mse_loss(pred[start:stop], target[start:stop])
             start = stop
-        return torch.mean(force_losses)
-
-    @staticmethod
-    def energy_mae_fn(pred, target, bound_idx):
-        start = 0 
-        energy_maes = torch.zeros(len(bound_idx), device=pred.device)
-        for i, l in enumerate(bound_idx):
-            energy_maes[i] = torch.abs(torch.sum(pred[start:stop]) - target[start])
-            start = stop
-        return torch.mean(force_maes)
-
-    @staticmethod
-    def force_mae_fn(pred, target, bound_idx):
-        start = 0 
-        force_maes = torch.zeros(len(bound_idx), device=pred.device)
-        for i, l in enumerate(bound_idx):
-            force_maes[i] = torch.mean(torch.abs(pred[start:stop] - target[start:stop]))
-            start = stop
-        return torch.mean(force_maes)
+        return torch.mean(forces_losses)
 
 
 
@@ -213,15 +194,10 @@ class ANI1xDataset(Dataset):
         eye = torch.eye(4)
         self.species_dict = {1: eye[0], 6: eye[1], 7: eye[2], 8: eye[3]}
 
-        self.energy_mean = 0.0184
-        self.energy_std = 0.1062
-        self.force_std = 0.0709
-
-        self.si_energies = torch.tensor([
-            -0.600952980000,
-            -38.08316124000,
-            -54.70775770000,
-            -75.19446356000])
+        self.si_energies = SI_ENERGIES
+        self.energy_mean = ENERGY_MEAN
+        self.energy_std = ENERGY_STD
+        self.forces_std = FORCES_STD
 
     def __len__(self):
         return len(self.pos_list)
@@ -242,14 +218,13 @@ class ANI1xDataset(Dataset):
 
         # Create targets
         if self.normalize:
-            adjustment = torch.sum(self.si_energies[None,:] * species)
+            adjustment = torch.sum(species @ self.si_energies)
             energy = energy - adjustment
-            energy = (energy - self.energy_mean)/self.energy_std
-            forces = forces/self.force_std
-        energy = torch.ones(len(pos)) * energy
-        forces = torch.tensor(forces).unsqueeze(-2)
-        targets = {'0': energy,
-                   '1': forces}
+            energy = (energy-self.energy_mean) / self.energy_std
+            forces = forces / self.forces_std
+        forces = torch.tensor(forces)
+        targets = {'energy': energy,
+                   'forces': forces}
 
         return graph, node_feats, targets
 
@@ -259,11 +234,10 @@ class ANI1xDataset(Dataset):
         v = []
         
         if knn is None or len(pos)<knn:
-            nbrs = NearestNeighbors(n_neighbors=len(pos)).fit(pos)
-        else:
-            nbrs = NearestNeighbors(n_neighbors=knn).fit(pos)
+            knn = len(pos)
+        nbrs = NearestNeighbors(n_neighbors=knn).fit(pos)
+        _, indices = nbrs.kneighbors(pos)
 
-        distances, indices = nbrs.kneighbors(pos)
         for idx_list in indices:
             for k in idx_list[1:]:
                 v.append(idx_list[0])
