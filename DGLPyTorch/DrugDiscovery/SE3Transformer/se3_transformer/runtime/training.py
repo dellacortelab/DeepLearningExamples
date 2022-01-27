@@ -87,14 +87,14 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
     force_losses = []
     for i, batch in tqdm(enumerate(train_dataloader), total=len(train_dataloader), unit='batch',
                          desc=f'Epoch {epoch_idx}', disable=(args.silent or local_rank != 0)):
-        *inputs, target = to_cuda(batch)
+        *inputs, target, end_tensor = to_cuda(batch)
 
         for callback in callbacks:
             callback.on_batch_start()
 
         with torch.cuda.amp.autocast(enabled=args.amp):
             pred = model(*inputs)
-            energy_loss, force_loss = loss_fn(pred, target)
+            energy_loss, force_loss = loss_fn(pred, target, end_tensor)
             energy_loss /= args.accumulate_grad_batches
             force_loss /= args.accumulate_grad_batches
             loss = energy_loss + force_loss
@@ -113,7 +113,7 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
         energy_losses.append(energy_loss.item())
         force_losses.append(force_loss.item())
 
-    return np.mean(energy_losses), np.mean(force_losses)
+    return np.mean(energy_losses), np.mean(force_losses) # Last batch may be smaller, making this a slightly-weighted average
 
 
 def train(model: nn.Module,
@@ -153,22 +153,22 @@ def train(model: nn.Module,
         if isinstance(train_dataloader.sampler, DistributedSampler):
             train_dataloader.sampler.set_epoch(epoch_idx)
 
-        energy_loss, force_loss = train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimizer, local_rank, callbacks,
+        energy_loss, forces_loss = train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimizer, local_rank, callbacks,
                            args)
         if dist.is_initialized():
             energy_loss = torch.tensor(energy_loss, dtype=torch.float, device=device)
             torch.distributed.all_reduce(energy_loss)
             energy_loss = (energy_loss / world_size).item()
-            force_loss = torch.tensor(force_loss, dtype=torch.float, device=device)
-            torch.distributed.all_reduce(force_loss)
-            force_loss = (force_loss / world_size).item()
+            forces_loss = torch.tensor(force_loss, dtype=torch.float, device=device)
+            torch.distributed.all_reduce(forces_loss)
+            forces_loss = (force_loss / world_size).item()
 
-        energy_error = np.sqrt(energy_loss) / 0.1062 * 627.5
-        force_error = np.sqrt(force_loss) / 0.0709 * 627.5
+        energy_error = np.sqrt(energy_loss) * ANI1xDataModule.ENERGY_STD * 627.5
+        forces_error = np.sqrt(forces_loss) * ANI1xDataModule.FORCES_STD * 627.5
 
         logging.info(f'Energy error: {energy_error}')
-        logging.info(f'Force error: {force_error}')
-        logger.log_metrics({'train error': (energy_error, force_error)}, epoch_idx)
+        logging.info(f'Forces error: {forces_error}')
+        logger.log_metrics({'train error': (energy_error, forces_error)}, epoch_idx)
 
         for callback in callbacks:
             callback.on_epoch_end()
@@ -233,8 +233,8 @@ if __name__ == '__main__':
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         callbacks = [PerformanceCallback(logger, args.batch_size * world_size)]
     else:
-        callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.energy_std, prefix='energy validation'),
-                     ANI1xMetricCallback(logger, targets_std=datamodule.force_std, prefix='force validation'),
+        callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy validation'),
+                     ANI1xMetricCallback(logger, targets_std=datamodule.FORCES_STD, prefix='forces validation'),
                      ANI1xLRSchedulerCallback(logger, epochs=args.epochs)]
 
     if is_distributed:
