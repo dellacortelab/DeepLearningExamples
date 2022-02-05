@@ -84,7 +84,7 @@ def load_state(model: nn.Module, optimizer: Optimizer, path: pathlib.Path, callb
 
 def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimizer, local_rank, callbacks, args):
     energy_losses = []
-    force_losses = []
+    forces_losses = []
     for i, batch in tqdm(enumerate(train_dataloader), total=len(train_dataloader), unit='batch',
                          desc=f'Epoch {epoch_idx}', disable=(args.silent or local_rank != 0)):
         *inputs, target, end_tensor = to_cuda(batch)
@@ -94,10 +94,10 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
 
         with torch.cuda.amp.autocast(enabled=args.amp):
             pred = model(*inputs)
-            energy_loss, force_loss = loss_fn(pred, target, end_tensor)
+            energy_loss, forces_loss = loss_fn(pred, target, end_tensor)
             energy_loss /= args.accumulate_grad_batches
-            force_loss /= args.accumulate_grad_batches
-            loss = energy_loss + force_loss
+            forces_loss /= args.accumulate_grad_batches
+            loss = args.energy_weight*energy_loss + forces_loss
         grad_scaler.scale(loss).backward()
 
         # gradient accumulation
@@ -111,9 +111,9 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
             model.zero_grad(set_to_none=True)
 
         energy_losses.append(energy_loss.item())
-        force_losses.append(force_loss.item())
+        forces_losses.append(forces_loss.item())
 
-    return np.mean(energy_losses), np.mean(force_losses) # Last batch may be smaller, making this a slightly-weighted average
+    return np.mean(energy_losses), np.mean(forces_losses) # Last batch may be smaller, making this a slightly-weighted average
 
 
 def train(model: nn.Module,
@@ -159,9 +159,9 @@ def train(model: nn.Module,
             energy_loss = torch.tensor(energy_loss, dtype=torch.float, device=device)
             torch.distributed.all_reduce(energy_loss)
             energy_loss = (energy_loss / world_size).item()
-            forces_loss = torch.tensor(force_loss, dtype=torch.float, device=device)
+            forces_loss = torch.tensor(forces_loss, dtype=torch.float, device=device)
             torch.distributed.all_reduce(forces_loss)
-            forces_loss = (force_loss / world_size).item()
+            forces_loss = (forces_loss / world_size).item()
 
         energy_error = np.sqrt(energy_loss) * ANI1xDataModule.ENERGY_STD * 627.5
         forces_error = np.sqrt(forces_loss) * ANI1xDataModule.FORCES_STD * 627.5

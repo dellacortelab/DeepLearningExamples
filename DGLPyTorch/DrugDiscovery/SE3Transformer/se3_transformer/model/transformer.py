@@ -176,7 +176,10 @@ class SE3Transformer(nn.Module):
                             help='If true, will use fused ops that are slower but that use less memory '
                                  '(expect 25 percent less memory). '
                                  'Only has an effect if AMP is enabled on Volta GPUs, or if running on Ampere GPUs')
-
+        parser.add_argument('--num_channels', type=int, default=32,
+                            help='Number of hidden channels in model')
+        parser.add_argument('--num_degrees', type=int, default=3,
+                            help='Number of degrees in model')
         return parser
 
 

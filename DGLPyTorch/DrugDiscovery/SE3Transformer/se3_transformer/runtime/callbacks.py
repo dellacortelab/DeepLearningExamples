@@ -75,20 +75,14 @@ class ANI1xMetricCallback(BaseCallback):
         start = 0
         for i, stop in enumerate(end_tensor):
             if self.prefix == 'energy validation':
-                pred = torch.sum(preds['0'][start:stop])
+                pred = torch.sum(preds['0'][start:stop, 0, 0])
                 target = targets['energy'][i]
             elif self.prefix == 'forces validation':
                 pred = preds['1'][start:stop, 0, :]
                 target = targets['forces'][start:stop]
             self.rmse(pred.detach(), target.detach())
             self.mae(pred.detach(), target.detach())
-
-    @staticmethod
-    def get_bound_idx(energy_targets):
-        bound_idx = torch.where(energy_targets[:-1] != energy_targets[1:])[0] + 1
-        last = torch.tensor([len(energy_targets)], device=bound_idx.device)
-        bound_idx = torch.cat([bound_idx, last])
-        return bound_idx
+            start = stop
 
     def on_validation_end(self, epoch=None):
         mae = self.mae.compute() * self.targets_std * 627.5
@@ -104,7 +98,7 @@ class ANI1xMetricCallback(BaseCallback):
         if self.best_mae != float('inf'):
             self.logger.log_metrics({f'{self.prefix} best MAE': self.best_mae})
         if self.best_rmse != float('inf'):
-            self. logger.log_metrics({f'{self.prefix} best RMSE': self.best_rmse})
+            self.logger.log_metrics({f'{self.prefix} best RMSE': self.best_rmse})
 
 
 class LRSchedulerCallback(BaseCallback):

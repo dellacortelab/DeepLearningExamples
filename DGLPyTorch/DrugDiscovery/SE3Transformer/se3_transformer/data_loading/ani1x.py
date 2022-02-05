@@ -67,7 +67,7 @@ class ANI1xDataModule(DataModule):
                 energy_list.append(energy)
                 forces_list.append(forces)
                 num_list.append(num)
-
+            break
         self.species_list = species_list
         self.pos_list = pos_list
         self.forces_list = forces_list
@@ -147,10 +147,10 @@ class ANI1xDataModule(DataModule):
         parser.add_argument('--precompute_bases', type=str2bool, nargs='?', const=True, default=False,
                             help='Precompute bases at the beginning of the script during dataset initialization,'
                                  ' instead of computing them at the beginning of each forward pass.')
-        parser.add_argument('--num_channels', type=int, default=32,
-                            help='Number of hidden channels in model')
-        parser.add_argument('--num_degrees', type=int, default=3,
-                            help='Number of degrees in model')
+        parser.add_argument('--energy_weight', type=float, default=1e-2,
+                            help='Weigh energy losses to force losses')
+        parser.add_argument('--knn', type=int, default=None,
+                            help='Number of interacting neighbors')
         return parent_parser
 
     def __repr__(self):
