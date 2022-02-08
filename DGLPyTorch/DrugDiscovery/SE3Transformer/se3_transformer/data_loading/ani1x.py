@@ -22,7 +22,7 @@ SI_ENERGIES = torch.tensor([
             -75.19446356000])
 ENERGY_MEAN = 0.0184
 ENERGY_STD = 0.1062
-FORCES_STD = 0.0709
+FORCES_STD = 0.0709 # Don't use
 
 class ANI1xDataModule(DataModule):
     NODE_FEATURE_DIM = 4
@@ -67,7 +67,6 @@ class ANI1xDataModule(DataModule):
                 energy_list.append(energy)
                 forces_list.append(forces)
                 num_list.append(num)
-            break
         self.species_list = species_list
         self.pos_list = pos_list
         self.forces_list = forces_list
@@ -135,11 +134,7 @@ class ANI1xDataModule(DataModule):
         targets = {'energy': energy,
                    'forces': forces}
 
-        # ends of targets
-        len_tensor = torch.tensor([len(targets['forces']) for targets in targets_list])
-        end_tensor = torch.cumsum(len_tensor, 0)
-
-        return batched_graph, node_feats, targets, end_tensor
+        return batched_graph, node_feats, targets
 
     @staticmethod
     def add_argparse_args(parent_parser):
@@ -147,9 +142,9 @@ class ANI1xDataModule(DataModule):
         parser.add_argument('--precompute_bases', type=str2bool, nargs='?', const=True, default=False,
                             help='Precompute bases at the beginning of the script during dataset initialization,'
                                  ' instead of computing them at the beginning of each forward pass.')
-        parser.add_argument('--energy_weight', type=float, default=1e-2,
-                            help='Weigh energy losses to force losses')
-        parser.add_argument('--knn', type=int, default=None,
+        parser.add_argument('--force_weight', type=float, default=1e-2,
+                            help='Weigh force losses to energy losses')
+        parser.add_argument('--knn', type=int, default=20,
                             help='Number of interacting neighbors')
         return parent_parser
 
@@ -157,28 +152,10 @@ class ANI1xDataModule(DataModule):
         return 'ANI1x'
 
     @staticmethod
-    def loss_fn(pred, target, end_tensor):
-        energy_loss = ANI1xDataModule.energy_loss_fn(pred['0'], target['energy'], end_tensor)
-        forces_loss = ANI1xDataModule.forces_loss_fn(pred['1'][:,0,:], target['forces'], end_tensor)
+    def loss_fn(pred, target):
+        energy_loss = F.mse_loss(pred[0], target['energy'])
+        forces_loss = F.mse_loss(pred[1], target['forces'])
         return energy_loss, forces_loss
-
-    @staticmethod
-    def energy_loss_fn(pred, target, end_tensor):
-        start = 0
-        energy_losses = torch.zeros(len(end_tensor), device=pred.device)
-        for i, stop in enumerate(end_tensor):
-            energy_losses[i] = F.mse_loss(torch.sum(pred[start:stop]), target[i])
-            start = stop
-        return torch.mean(energy_losses)
-
-    @staticmethod
-    def forces_loss_fn(pred, target, end_tensor):
-        start = 0
-        forces_losses = torch.zeros(len(end_tensor), device=pred.device)
-        for i, stop in enumerate(end_tensor):
-            forces_losses[i] = F.mse_loss(pred[start:stop], target[start:stop])
-            start = stop
-        return torch.mean(forces_losses)
 
 
 
@@ -221,7 +198,7 @@ class ANI1xDataset(Dataset):
             adjustment = torch.sum(species @ self.si_energies)
             energy = energy - adjustment
             energy = (energy-self.energy_mean) / self.energy_std
-            forces = forces / self.forces_std
+            forces = forces / self.energy_std
         forces = torch.tensor(forces)
         targets = {'energy': energy,
                    'forces': forces}

@@ -29,8 +29,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-#from apex.optimizers import FusedAdam, FusedLAMB
-from torch.optim import Adam as FusedAdam
+from apex.optimizers import FusedAdam, FusedLAMB
 from torch.nn.modules.loss import _Loss
 from torch.nn.parallel import DistributedDataParallel
 from torch.optim import Optimizer
@@ -38,7 +37,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm
 
 from se3_transformer.data_loading import ANI1xDataModule
-from se3_transformer.model import SE3Transformer
+from se3_transformer.model import SE3TransformerANI1x
 from se3_transformer.model.fiber import Fiber
 from se3_transformer.runtime import gpu_affinity
 from se3_transformer.runtime.arguments import PARSER
@@ -87,17 +86,17 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
     forces_losses = []
     for i, batch in tqdm(enumerate(train_dataloader), total=len(train_dataloader), unit='batch',
                          desc=f'Epoch {epoch_idx}', disable=(args.silent or local_rank != 0)):
-        *inputs, target, end_tensor = to_cuda(batch)
+        *inputs, target = to_cuda(batch)
 
         for callback in callbacks:
             callback.on_batch_start()
 
         with torch.cuda.amp.autocast(enabled=args.amp):
-            pred = model(*inputs)
-            energy_loss, forces_loss = loss_fn(pred, target, end_tensor)
+            pred = model(inputs)
+            energy_loss, forces_loss = loss_fn(pred, target)
             energy_loss /= args.accumulate_grad_batches
             forces_loss /= args.accumulate_grad_batches
-            loss = args.energy_weight*energy_loss + forces_loss
+            loss = energy_loss + args.force_weight*forces_loss
         grad_scaler.scale(loss).backward()
 
         # gradient accumulation
@@ -164,11 +163,12 @@ def train(model: nn.Module,
             forces_loss = (forces_loss / world_size).item()
 
         energy_error = np.sqrt(energy_loss) * ANI1xDataModule.ENERGY_STD * 627.5
-        forces_error = np.sqrt(forces_loss) * ANI1xDataModule.FORCES_STD * 627.5
+        forces_error = np.sqrt(forces_loss) * ANI1xDataModule.ENERGY_STD * 627.5
 
         logging.info(f'Energy error: {energy_error}')
         logging.info(f'Forces error: {forces_error}')
-        logger.log_metrics({'train error': (energy_error, forces_error)}, epoch_idx)
+        logger.log_metrics({'energy error': energy_error}, epoch_idx)
+        logger.log_metrics({'forces error': forces_error}, epoch_idx)
 
         for callback in callbacks:
             callback.on_epoch_end()
@@ -218,11 +218,11 @@ if __name__ == '__main__':
     logger = LoggerCollection(loggers)
 
     datamodule = ANI1xDataModule(**vars(args))
-    model = SE3Transformer(
+    model = SE3TransformerANI1x(
         fiber_in=Fiber({0: datamodule.NODE_FEATURE_DIM}),
-        fiber_hidden=Fiber.create(args.num_degrees, args.num_channels),
-        fiber_out=Fiber({0: 1, 1: 1}),
+        fiber_out=Fiber({0: args.num_degrees * args.num_channels}),
         fiber_edge=Fiber({0: datamodule.EDGE_FEATURE_DIM}),
+        output_dim=1,
         tensor_cores=using_tensor_cores(args.amp),  # use Tensor Cores more effectively
         **vars(args)
     )
@@ -234,7 +234,7 @@ if __name__ == '__main__':
         callbacks = [PerformanceCallback(logger, args.batch_size * world_size)]
     else:
         callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy validation'),
-                     ANI1xMetricCallback(logger, targets_std=datamodule.FORCES_STD, prefix='forces validation'),
+                     ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='forces validation'),
                      ANI1xLRSchedulerCallback(logger, epochs=args.epochs)]
 
     if is_distributed:

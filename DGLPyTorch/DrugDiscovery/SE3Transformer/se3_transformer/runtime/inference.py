@@ -36,24 +36,24 @@ from se3_transformer.runtime.loggers import DLLogger, WandbLogger, LoggerCollect
 from se3_transformer.runtime.utils import to_cuda, get_local_rank
 
 
-@torch.inference_mode()
+#@torch.inference_mode() # Prevents force calculations
 def evaluate(model: nn.Module,
              dataloader: DataLoader,
              callbacks: List[BaseCallback],
              args):
-    model.eval()
+    #model.eval() # Prevents forces calculations
     for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), unit='batch', desc=f'Evaluation',
                          leave=False, disable=(args.silent or get_local_rank() != 0)):
-        *input, target, end_tensor = to_cuda(batch)
+        *inputs, target = to_cuda(batch)
 
         for callback in callbacks:
             callback.on_batch_start()
 
         with torch.cuda.amp.autocast(enabled=args.amp):
-            pred = model(*input)
+            pred = model(inputs)
 
             for callback in callbacks:
-                callback.on_validation_step(input, target, pred, end_tensor)
+                callback.on_validation_step(inputs, target, pred)
 
 
 if __name__ == '__main__':

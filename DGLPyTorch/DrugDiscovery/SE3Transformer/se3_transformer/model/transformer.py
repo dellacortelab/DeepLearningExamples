@@ -69,7 +69,7 @@ class SE3Transformer(nn.Module):
                  channels_div: int,
                  fiber_edge: Fiber = Fiber({}),
                  return_type: Optional[int] = None,
-                 pooling: Optional[Literal['avg', 'max']] = None,
+                 pooling: Optional[Literal['avg', 'max', 'sum']] = None,
                  norm: bool = True,
                  use_layer_norm: bool = True,
                  tensor_cores: bool = False,
@@ -84,7 +84,7 @@ class SE3Transformer(nn.Module):
         :param num_heads:           Number of attention heads
         :param channels_div:        Channels division before feeding to attention layer
         :param return_type:         Return only features of this type
-        :param pooling:             'avg' or 'max' graph pooling before MLP layers
+        :param pooling:             'avg', 'max', 'sum' graph pooling before MLP layers
         :param norm:                Apply a normalization layer after each attention block
         :param use_layer_norm:      Apply layer normalization between MLP layers
         :param tensor_cores:        True if using Tensor Cores (affects the use of fully fused convs, and padded bases)
@@ -166,7 +166,7 @@ class SE3Transformer(nn.Module):
                             help='Number of heads in self-attention')
         parser.add_argument('--channels_div', type=int, default=2,
                             help='Channels division before feeding to attention layer')
-        parser.add_argument('--pooling', type=str, default=None, const=None, nargs='?', choices=['max', 'avg'],
+        parser.add_argument('--pooling', type=str, default='sum', const=None, nargs='?', choices=['max', 'avg', 'sum'],
                             help='Type of graph pooling')
         parser.add_argument('--norm', type=str2bool, nargs='?', const=True, default=False,
                             help='Apply a normalization layer after each attention block')
@@ -214,6 +214,62 @@ class SE3TransformerPooled(nn.Module):
         feats = self.transformer(graph, node_feats, edge_feats, basis).squeeze(-1)
         y = self.mlp(feats).squeeze(-1)
         return y
+
+    @staticmethod
+    def add_argparse_args(parent_parser):
+        parser = parent_parser.add_argument_group("Model architecture")
+        SE3Transformer.add_argparse_args(parser)
+        parser.add_argument('--num_degrees',
+                            help='Number of degrees to use. Hidden features will have types [0, ..., num_degrees - 1]',
+                            type=int, default=4)
+        parser.add_argument('--num_channels', help='Number of channels for the hidden features', type=int, default=32)
+        return parent_parser
+
+class SE3TransformerANI1x(nn.Module):
+    def __init__(self,
+                 fiber_in: Fiber,
+                 fiber_out: Fiber,
+                 fiber_edge: Fiber,
+                 num_degrees: int,
+                 num_channels: int,
+                 output_dim: int,
+                 **kwargs):
+        super().__init__()
+        self.transformer = SE3TransformerPooled(
+            fiber_in=fiber_in,
+            fiber_out=fiber_out,
+            fiber_edge=fiber_edge,
+            num_degrees=num_degrees,
+            num_channels=num_channels,
+            output_dim=output_dim,
+            **kwargs
+        )
+
+    def forward(self, inputs, forces=True):
+        graph, node_feats, *basis = inputs
+        if forces==True:
+            graph.ndata['pos'].requires_grad = True
+            graph.edata['rel_pos'] = self._get_relative_pos(graph) # recalculate so gradients go through the pos.
+            gp = self.transformer.transformer
+            basis = get_basis(graph.edata['rel_pos'], max_degree=gp.max_degree, compute_gradients=True,
+                                       use_pad_trick=gp.tensor_cores and not gp.low_memory,
+                                       amp=torch.is_autocast_enabled())
+ 
+        energies = self.transformer(graph, node_feats, None, basis).squeeze(-1)
+
+        if forces==True:
+            torch.sum(energies).backward(retain_graph=True) # Retain graph so loss gradients can be calculated
+            forces = -graph.ndata['pos'].grad
+            return energies, forces
+
+        return energies
+
+    @staticmethod
+    def _get_relative_pos(graph: DGLGraph) -> Tensor:
+        x = graph.ndata['pos']
+        src, dst = graph.edges()
+        rel_pos = x[dst] - x[src]
+        return rel_pos
 
     @staticmethod
     def add_argparse_args(parent_parser):

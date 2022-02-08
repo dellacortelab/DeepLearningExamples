@@ -30,7 +30,7 @@ import numpy as np
 import torch
 
 from se3_transformer.runtime.loggers import Logger
-from se3_transformer.runtime.metrics import ANI1xMeanAbsoluteError, ANI1xRootMeanSquaredError
+from se3_transformer.runtime.metrics import MeanAbsoluteError, RootMeanSquaredError
 
 
 class BaseCallback(ABC):
@@ -46,7 +46,7 @@ class BaseCallback(ABC):
     def on_batch_start(self):
         pass
 
-    def on_validation_step(self, input, target, pred, end_tensor):
+    def on_validation_step(self, input, target, pred):
         pass
 
     def on_validation_end(self, epoch=None):
@@ -63,26 +63,23 @@ class ANI1xMetricCallback(BaseCallback):
     """ Logs the recaled MAE and RMSE for ANI1x regression """
 
     def __init__(self, logger, targets_std, prefix=''):
-        self.mae = ANI1xMeanAbsoluteError()
-        self.rmse = ANI1xRootMeanSquaredError()
+        self.mae = MeanAbsoluteError()
+        self.rmse = RootMeanSquaredError()
         self.logger = logger
         self.targets_std = targets_std
         self.prefix = prefix
         self.best_mae = float('inf')
         self.best_rmse = float('inf')
 
-    def on_validation_step(self, inputs, targets, preds, end_tensor):
-        start = 0
-        for i, stop in enumerate(end_tensor):
-            if self.prefix == 'energy validation':
-                pred = torch.sum(preds['0'][start:stop, 0, 0])
-                target = targets['energy'][i]
-            elif self.prefix == 'forces validation':
-                pred = preds['1'][start:stop, 0, :]
-                target = targets['forces'][start:stop]
-            self.rmse(pred.detach(), target.detach())
-            self.mae(pred.detach(), target.detach())
-            start = stop
+    def on_validation_step(self, inputs, targets, preds):
+        if self.prefix == 'energy validation':
+            pred = preds[0]
+            target = targets['energy']
+        elif self.prefix == 'forces validation':
+            pred = preds[1]
+            target = targets['forces']
+        self.rmse(pred.detach(), target.detach())
+        self.mae(pred.detach(), target.detach())
 
     def on_validation_end(self, epoch=None):
         mae = self.mae.compute() * self.targets_std * 627.5

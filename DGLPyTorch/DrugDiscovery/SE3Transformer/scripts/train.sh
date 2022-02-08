@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # CLI args with defaults
-BATCH_SIZE=${1:-100}
-AMP=${2:-false}
+BATCH_SIZE=${1:-80}
+AMP=${2:-true}
 NUM_EPOCHS=${3:-100}
 LEARNING_RATE=${4:-0.0001}
 WEIGHT_DECAY=${5:-0.1}
