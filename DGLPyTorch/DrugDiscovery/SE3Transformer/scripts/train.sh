@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
 # CLI args with defaults
-BATCH_SIZE=${1:-80}
+BATCH_SIZE=${1:-25}
 AMP=${2:-true}
-NUM_EPOCHS=${3:-100}
-LEARNING_RATE=${4:-0.0001}
+NUM_EPOCHS=${3:-20}
+LEARNING_RATE=${4:-1e-3}
 WEIGHT_DECAY=${5:-0.1}
 
 python -m se3_transformer.runtime.training \
@@ -16,6 +16,5 @@ python -m se3_transformer.runtime.training \
   --use_layer_norm \
   --norm \
   --save_ckpt_path model_ani1x.pth \
-  --precompute_bases \
   --seed 42 \
   --gradient_clip 10.0 \

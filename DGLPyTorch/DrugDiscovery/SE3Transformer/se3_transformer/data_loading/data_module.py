@@ -58,7 +58,8 @@ class DataModule(ABC):
         return _get_dataloader(self.ds_train, shuffle=True, **self.dataloader_kwargs)
 
     def val_dataloader(self) -> DataLoader:
-        return _get_dataloader(self.ds_val, shuffle=False, **self.dataloader_kwargs)
+        return _get_dataloader(self.ds_val, shuffle=True, **self.dataloader_kwargs)
+        # Shuffle so batch size can be constant
 
     def test_dataloader(self) -> DataLoader:
         return _get_dataloader(self.ds_test, shuffle=False, **self.dataloader_kwargs)
