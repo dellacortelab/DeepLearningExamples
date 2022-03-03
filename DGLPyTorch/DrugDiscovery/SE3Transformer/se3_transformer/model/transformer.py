@@ -260,11 +260,12 @@ class SE3TransformerANI1x(nn.Module):
         if not forces:
             return energies
 
-        torch.sum(energies).backward(create_graph=create_graph)
-        forces = -graph.ndata['pos'].grad
+        forces = -torch.autograd.grad(torch.sum(energies),
+                                      graph.ndata['pos'],
+                                      create_graph=True,
+                                     )[0]
         return energies, forces
 
-        return energies
 
     @staticmethod
     def _get_relative_pos(graph: DGLGraph) -> Tensor:

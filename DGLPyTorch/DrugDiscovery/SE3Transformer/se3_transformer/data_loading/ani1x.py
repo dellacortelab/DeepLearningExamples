@@ -142,7 +142,7 @@ class ANI1xDataModule(DataModule):
         parser.add_argument('--precompute_bases', type=str2bool, nargs='?', const=True, default=False,
                             help='Precompute bases at the beginning of the script during dataset initialization,'
                                  ' instead of computing them at the beginning of each forward pass.')
-        parser.add_argument('--force_weight', type=float, default=1e-2,
+        parser.add_argument('--force_weight', type=float, default=1e-1,
                             help='Weigh force losses to energy losses')
         parser.add_argument('--knn', type=int, default=20,
                             help='Number of interacting neighbors')

@@ -3,7 +3,7 @@
 # CLI args with defaults
 BATCH_SIZE=${1:-25}
 AMP=${2:-true}
-NUM_EPOCHS=${3:-20}
+NUM_EPOCHS=${3:-100}
 LEARNING_RATE=${4:-1e-3}
 WEIGHT_DECAY=${5:-0.1}
 
@@ -18,3 +18,6 @@ python -m se3_transformer.runtime.training \
   --save_ckpt_path model_ani1x.pth \
   --seed 42 \
   --gradient_clip 10.0 \
+  --wandb \
+  --eval_interval 1 \
+  --force_weight 0.1 \

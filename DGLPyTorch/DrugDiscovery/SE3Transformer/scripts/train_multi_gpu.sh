@@ -3,9 +3,9 @@
 # CLI args with defaults
 BATCH_SIZE=${1:-25}
 AMP=${2:-true}
-NUM_EPOCHS=${3:-50}
+NUM_EPOCHS=${3:-100}
 LEARNING_RATE=${4:-1e-3}
-WEIGHT_DECAY=${5:-0.0}
+WEIGHT_DECAY=${5:-0.1}
 
 python -m torch.distributed.run --nnodes=1 --nproc_per_node=gpu --max_restarts 0 --module \
   se3_transformer.runtime.training \
@@ -23,3 +23,4 @@ python -m torch.distributed.run --nnodes=1 --nproc_per_node=gpu --max_restarts 0
   --gradient_clip 10.0 \
   --wandb \
   --eval_interval 1 \
+  --force_weight 0.1 \
