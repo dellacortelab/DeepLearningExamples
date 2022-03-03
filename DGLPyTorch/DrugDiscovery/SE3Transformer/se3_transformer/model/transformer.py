@@ -245,7 +245,7 @@ class SE3TransformerANI1x(nn.Module):
             **kwargs
         )
 
-    def forward(self, inputs, forces=True):
+    def forward(self, inputs, forces=True, create_graph=True):
         graph, node_feats, *basis = inputs
         if forces==True:
             graph.ndata['pos'].requires_grad = True
@@ -257,10 +257,12 @@ class SE3TransformerANI1x(nn.Module):
  
         energies = self.transformer(graph, node_feats, None, basis).squeeze(-1)
 
-        if forces==True:
-            torch.sum(energies).backward(retain_graph=True) # Retain graph so loss gradients can be calculated
-            forces = -graph.ndata['pos'].grad
-            return energies, forces
+        if not forces:
+            return energies
+
+        torch.sum(energies).backward(create_graph=create_graph)
+        forces = -graph.ndata['pos'].grad
+        return energies, forces
 
         return energies
 

@@ -111,7 +111,8 @@ class LRSchedulerCallback(BaseCallback):
         self.scheduler = self.get_scheduler(optimizer, args)
 
     def on_checkpoint_load(self, checkpoint):
-        self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        if self.scheduler is not None:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
     def on_checkpoint_save(self, checkpoint):
         checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
