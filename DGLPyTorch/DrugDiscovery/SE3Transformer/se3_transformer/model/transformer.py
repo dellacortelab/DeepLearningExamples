@@ -74,6 +74,7 @@ class SE3Transformer(nn.Module):
                  use_layer_norm: bool = True,
                  tensor_cores: bool = False,
                  low_memory: bool = False,
+                 cutoff: float = float('inf'),
                  **kwargs):
         """
         :param num_layers:          Number of attention layers
@@ -100,6 +101,7 @@ class SE3Transformer(nn.Module):
         self.max_degree = max(*fiber_in.degrees, *fiber_hidden.degrees, *fiber_out.degrees)
         self.tensor_cores = tensor_cores
         self.low_memory = low_memory
+        self.cutoff = cutoff
 
         if low_memory:
             self.fuse_level = ConvSE3FuseLevel.NONE
@@ -117,7 +119,8 @@ class SE3Transformer(nn.Module):
                                                    use_layer_norm=use_layer_norm,
                                                    max_degree=self.max_degree,
                                                    fuse_level=self.fuse_level,
-                                                   low_memory=low_memory))
+                                                   low_memory=low_memory,
+                                                   cutoff=cutoff))
             if norm:
                 graph_modules.append(NormSE3(fiber_hidden))
             fiber_in = fiber_hidden

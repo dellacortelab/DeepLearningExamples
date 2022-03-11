@@ -38,6 +38,7 @@ class ANI1xDataModule(DataModule):
                  amp: bool = False,
                  precompute_bases: bool = False,
                  knn: int = None,
+                 cutoff: float = float('inf'),
                  **kwargs):
         self.data_dir = data_dir # This needs to be before __init__ so that prepare_data has access to it
         super().__init__(batch_size=batch_size, num_workers=num_workers, collate_fn=self._collate)
@@ -46,9 +47,9 @@ class ANI1xDataModule(DataModule):
         self.num_degrees = num_degrees 
 
         self.load_data()
-        self.ds_train = self.get_dataset(mode='train', knn=knn)
-        self.ds_val = self.get_dataset(mode='validation', knn=knn)
-        self.ds_test = self.get_dataset(mode='test', knn=knn)
+        self.ds_train = self.get_dataset(mode='train', knn=knn, cutoff=cutoff)
+        self.ds_val = self.get_dataset(mode='validation', knn=knn, cutoff=cutoff)
+        self.ds_test = self.get_dataset(mode='test', knn=knn, cutoff=cutoff)
 
     def load_data(self):
         species_list = []
@@ -97,7 +98,7 @@ class ANI1xDataModule(DataModule):
                 d['coordinates'] = grp['coordinates'][()][mask]
                 yield d
 
-    def get_dataset(self, mode='train', knn=None):
+    def get_dataset(self, mode='train', knn=None, cutoff=float('inf')):
         if mode=='train':
             idx = np.arange(18)
         elif mode=='validation':
@@ -117,7 +118,7 @@ class ANI1xDataModule(DataModule):
                 ds_energy_list.append(energy) 
                 ds_forces_list.append(forces)
 
-        dataset = ANI1xDataset(ds_pos_list, ds_species_list, ds_energy_list, ds_forces_list, knn=None)
+        dataset = ANI1xDataset(ds_pos_list, ds_species_list, ds_energy_list, ds_forces_list, knn=knn, cutoff=cutoff)
         return dataset
 
     def _collate(self, samples):
@@ -144,8 +145,10 @@ class ANI1xDataModule(DataModule):
                                  ' instead of computing them at the beginning of each forward pass.')
         parser.add_argument('--force_weight', type=float, default=1e-1,
                             help='Weigh force losses to energy losses')
-        parser.add_argument('--knn', type=int, default=20,
+        parser.add_argument('--knn', type=int, default=None,
                             help='Number of interacting neighbors')
+        parser.add_argument('--cutoff', type=float, default=3.0,
+                            help='Radius of graph neighborhood')
         return parent_parser
 
     def __repr__(self):
@@ -160,12 +163,13 @@ class ANI1xDataModule(DataModule):
 
 
 class ANI1xDataset(Dataset):
-    def __init__(self, pos_list, species_list, energy_list, forces_list, knn=None, normalize=True):
+    def __init__(self, pos_list, species_list, energy_list, forces_list, knn=None, cutoff=float('inf'), normalize=True):
         self.pos_list = pos_list
         self.species_list = species_list
         self.energy_list = energy_list
         self.forces_list = forces_list
         self.knn = knn
+        self.cutoff = cutoff
         self.normalize = normalize
 
         eye = torch.eye(4)
@@ -187,7 +191,10 @@ class ANI1xDataset(Dataset):
 
         # Create graph
         pos = torch.tensor(pos)
-        graph = self._create_graph(pos, knn=self.knn)
+        if self.knn is not None:
+            graph = self._create_knn_graph(pos, knn=self.knn)
+        else:
+            graph = self._create_graph(pos, cutoff=self.cutoff)
 
         # Create node features
         species = torch.stack([self.species_dict[atom] for atom in species])
@@ -205,8 +212,29 @@ class ANI1xDataset(Dataset):
 
         return graph, node_feats, targets
 
+    @staticmethod
+    def _create_graph(pos, cutoff=float('inf')):
+        u = []
+        v = []
+        
+        dist_mat = torch.norm(pos[:,None,:]-pos[None,:,:], p=2, dim=2)
+        N = len(pos)
+        for i in range(N):
+            for j in range(N):
+                if i==j:
+                    continue
+                if dist_mat[i,j] < cutoff:
+                    # Add i->j edge
+                    u.append(i)
+                    v.append(j)
+
+        graph = dgl.graph((u,v))
+        graph.ndata['pos'] = pos
+        graph.edata['rel_pos'] = pos[v] - pos[u]
+        return graph
+
     @staticmethod 
-    def _create_graph(pos, knn=None):
+    def _create_knn_graph(pos, knn=None):
         u = []
         v = []
         

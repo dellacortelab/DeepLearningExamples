@@ -44,7 +44,8 @@ class AttentionSE3(nn.Module):
             self,
             num_heads: int,
             key_fiber: Fiber,
-            value_fiber: Fiber
+            value_fiber: Fiber,
+            cutoff: float
     ):
         """
         :param num_heads:     Number of attention heads
@@ -55,6 +56,14 @@ class AttentionSE3(nn.Module):
         self.num_heads = num_heads
         self.key_fiber = key_fiber
         self.value_fiber = value_fiber
+        self.cutoff = cutoff
+
+    @staticmethod
+    def bump_function(rel_pos, cutoff=float('inf')):
+        dist = torch.norm(rel_pos, p=2, dim=1)
+        bump = torch.zeros_like(dist)
+        bump[dist<cutoff] = torch.exp(1-1/(1-(dist[dist<cutoff]/cutoff)**2))
+        return bump[:,None]
 
     def forward(
             self,
@@ -81,6 +90,7 @@ class AttentionSE3(nn.Module):
                 edge_weights = dgl.ops.e_dot_v(graph, key, query).squeeze(-1)
                 edge_weights = edge_weights / np.sqrt(self.key_fiber.num_features)
                 edge_weights = edge_softmax(graph, edge_weights)
+                edge_weights = edge_weights * self.bump_function(graph.edata['rel_pos'], self.cutoff) 
                 edge_weights = edge_weights[..., None, None]
 
             with nvtx_range('weighted sum'):
@@ -117,6 +127,7 @@ class AttentionBlockSE3(nn.Module):
             max_degree: bool = 4,
             fuse_level: ConvSE3FuseLevel = ConvSE3FuseLevel.FULL,
             low_memory: bool = False,
+            cutoff: float = float('inf'),
             **kwargs
     ):
         """
@@ -143,7 +154,7 @@ class AttentionBlockSE3(nn.Module):
                                     use_layer_norm=use_layer_norm, max_degree=max_degree, fuse_level=fuse_level,
                                     allow_fused_output=True, low_memory=low_memory)
         self.to_query = LinearSE3(fiber_in, key_query_fiber)
-        self.attention = AttentionSE3(num_heads, key_query_fiber, value_fiber)
+        self.attention = AttentionSE3(num_heads, key_query_fiber, value_fiber, cutoff)
         self.project = LinearSE3(value_fiber + fiber_in, fiber_out)
 
     def forward(
