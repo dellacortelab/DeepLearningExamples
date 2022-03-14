@@ -265,7 +265,7 @@ class SE3TransformerANI1x(nn.Module):
 
         forces = -torch.autograd.grad(torch.sum(energies),
                                       graph.ndata['pos'],
-                                      create_graph=True,
+                                      create_graph=create_graph,
                                      )[0]
         return energies, forces
 
