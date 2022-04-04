@@ -22,14 +22,18 @@ SI_ENERGIES = torch.tensor([
             -75.19446356000])
 ENERGY_MEAN = 0.0184
 ENERGY_STD = 0.1062
-FORCES_STD = 0.0709 # Don't use
+FORCES_STD = 0.0709 # Not used
+
+NODE_FEATURE_DIM = 4
+EDGE_FEATURE_DIM = 0
+
+
 
 class ANI1xDataModule(DataModule):
-    NODE_FEATURE_DIM = 4
-    EDGE_FEATURE_DIM = 0
+    NODE_FEATURE_DIM = NODE_FEATURE_DIM
+    EDGE_FEATURE_DIM = EDGE_FEATURE_DIM
 
     ENERGY_STD = ENERGY_STD
-    FORCES_STD = FORCES_STD
     def __init__(self,
                  data_dir: pathlib.Path,
                  batch_size: int = 256,
@@ -37,7 +41,6 @@ class ANI1xDataModule(DataModule):
                  num_degrees: int = 4,
                  amp: bool = False,
                  precompute_bases: bool = False,
-                 knn: int = None,
                  cutoff: float = float('inf'),
                  **kwargs):
         self.data_dir = data_dir # This needs to be before __init__ so that prepare_data has access to it
@@ -46,12 +49,13 @@ class ANI1xDataModule(DataModule):
         self.batch_size = batch_size
         self.num_degrees = num_degrees 
 
-        self.load_data()
-        self.ds_train = self.get_dataset(mode='train', knn=knn, cutoff=cutoff)
-        self.ds_val = self.get_dataset(mode='validation', knn=knn, cutoff=cutoff)
-        self.ds_test = self.get_dataset(mode='test', knn=knn, cutoff=cutoff)
+        self.load_main_data()
+        self.load_test_data()
+        self.ds_train = self.get_dataset(mode='train', cutoff=cutoff)
+        self.ds_val = self.get_dataset(mode='validation', cutoff=cutoff)
+        self.ds_test = self.get_dataset(mode='test', cutoff=cutoff)
 
-    def load_data(self):
+    def load_main_data(self):
         species_list = []
         pos_list = []
         forces_list = []
@@ -68,11 +72,39 @@ class ANI1xDataModule(DataModule):
                 energy_list.append(energy)
                 forces_list.append(forces)
                 num_list.append(num)
+
         self.species_list = species_list
         self.pos_list = pos_list
         self.forces_list = forces_list
         self.energy_list = energy_list
         self.num_list = num_list
+        return
+
+    def load_test_data(self):
+        species_list = []
+        pos_list = []
+        forces_list = []
+        energy_list = []
+        num_list = []
+
+        test_dir = os.path.join(self.data_dir, 'COMP6v1')
+        for subdir in os.listdir(test_dir):
+            subpath = os.path.join(test_dir, subdir)
+            for file_name in os.listdir(subpath):
+                filepath = os.path.join(subpath, file_name)
+                with h5py.File(filepath, 'r') as f:
+                    for main in f.values():
+                        for mol in main.values():
+                            species_list += [list(mol['species'])] * len(mol['forces'])
+                            pos_list += list(mol['coordinates'])
+                            forces_list += list(mol['forces'])
+                            energy_list += list(mol['energies'])
+
+        self.test_species_list = species_list
+        self.test_pos_list = pos_list
+        self.test_forces_list = forces_list
+        self.test_energy_list = energy_list
+        return
 
     @staticmethod 
     def iter_data_buckets(h5filename, keys=['wb97x_dz.energy']):
@@ -98,12 +130,20 @@ class ANI1xDataModule(DataModule):
                 d['coordinates'] = grp['coordinates'][()][mask]
                 yield d
 
-    def get_dataset(self, mode='train', knn=None, cutoff=float('inf')):
-        if mode=='train':
-            idx = np.arange(18)
+    def get_dataset(self, mode='train', cutoff=float('inf')):
+        if mode=='test':
+            dataset = ANI1xDataset(self.test_pos_list,
+                                   self.test_species_list,
+                                   self.test_energy_list,
+                                   self.test_forces_list,
+                                   cutoff=cutoff,
+                                   test=True
+            )
+            return dataset
+
+        elif mode=='train':
+            idx = np.arange(19)
         elif mode=='validation':
-            idx = np.array([18])
-        elif mode=='test':
             idx = np.array([19])
 
         ds_pos_list = []
@@ -111,15 +151,25 @@ class ANI1xDataModule(DataModule):
         ds_energy_list = []
         ds_forces_list = []
 
-        for pos, species, energy, forces, num in zip(self.pos_list, self.species_list, self.energy_list, self.forces_list, self.num_list):
+        for pos, species, energy, forces, num in zip(self.pos_list,
+                                                     self.species_list,
+                                                     self.energy_list,
+                                                     self.forces_list,
+                                                     self.num_list):
             if num % 20 in idx:
                 ds_pos_list.append(pos)
                 ds_species_list.append(species)
                 ds_energy_list.append(energy) 
                 ds_forces_list.append(forces)
 
-        dataset = ANI1xDataset(ds_pos_list, ds_species_list, ds_energy_list, ds_forces_list, knn=knn, cutoff=cutoff)
+        dataset = ANI1xDataset(ds_pos_list,
+                               ds_species_list,
+                               ds_energy_list,
+                               ds_forces_list,
+                               cutoff=cutoff
+        )
         return dataset
+           
 
     def _collate(self, samples):
         graphs, node_feats_list, targets_list, *bases = map(list, zip(*samples))
@@ -140,13 +190,8 @@ class ANI1xDataModule(DataModule):
     @staticmethod
     def add_argparse_args(parent_parser):
         parser = parent_parser.add_argument_group("ANI1x dataset")
-        parser.add_argument('--precompute_bases', type=str2bool, nargs='?', const=True, default=False,
-                            help='Precompute bases at the beginning of the script during dataset initialization,'
-                                 ' instead of computing them at the beginning of each forward pass.')
         parser.add_argument('--force_weight', type=float, default=1e-1,
                             help='Weigh force losses to energy losses')
-        parser.add_argument('--knn', type=int, default=None,
-                            help='Number of interacting neighbors')
         parser.add_argument('--cutoff', type=float, default=3.0,
                             help='Radius of graph neighborhood')
         return parent_parser
@@ -163,17 +208,17 @@ class ANI1xDataModule(DataModule):
 
 
 class ANI1xDataset(Dataset):
-    def __init__(self, pos_list, species_list, energy_list, forces_list, knn=None, cutoff=float('inf'), normalize=True):
+    def __init__(self, pos_list, species_list, energy_list, forces_list, cutoff=float('inf'), normalize=True, test=False):
         self.pos_list = pos_list
         self.species_list = species_list
         self.energy_list = energy_list
         self.forces_list = forces_list
-        self.knn = knn
         self.cutoff = cutoff
         self.normalize = normalize
 
         eye = torch.eye(4)
         self.species_dict = {1: eye[0], 6: eye[1], 7: eye[2], 8: eye[3]}
+        self.test_species_dict = {b'H': eye[0], b'C': eye[1], b'N':eye[2], b'O':eye[3]}
 
         self.si_energies = SI_ENERGIES
         self.energy_mean = ENERGY_MEAN
@@ -191,13 +236,13 @@ class ANI1xDataset(Dataset):
 
         # Create graph
         pos = torch.tensor(pos)
-        if self.knn is not None:
-            graph = self._create_knn_graph(pos, knn=self.knn)
-        else:
-            graph = self._create_graph(pos, cutoff=self.cutoff)
+        graph = self._create_graph(pos, cutoff=self.cutoff)
 
         # Create node features
-        species = torch.stack([self.species_dict[atom] for atom in species])
+        if self.test:
+            species = torch.stack([self.test_species_dict[atom] for atom in species])
+        else:
+            species = torch.stack([self.species_dict[atom] for atom in species]) 
         node_feats = {'0': species.unsqueeze(-1)}
 
         # Create targets
@@ -223,32 +268,10 @@ class ANI1xDataset(Dataset):
             for j in range(N):
                 if i==j:
                     continue
-                if dist_mat[i,j] < cutoff:
-                    # Add i->j edge
+                elif dist_mat[i,j] < cutoff:
                     u.append(i)
                     v.append(j)
 
         graph = dgl.graph((u,v))
         graph.ndata['pos'] = pos
-        graph.edata['rel_pos'] = pos[v] - pos[u]
         return graph
-
-    @staticmethod 
-    def _create_knn_graph(pos, knn=None):
-        u = []
-        v = []
-        
-        if knn is None or len(pos)<knn:
-            knn = len(pos)
-        nbrs = NearestNeighbors(n_neighbors=knn).fit(pos)
-        _, indices = nbrs.kneighbors(pos)
-
-        for idx_list in indices:
-            for k in idx_list[1:]:
-                v.append(idx_list[0])
-                u.append(k)
-
-        graph = dgl.graph((u,v))
-        graph.ndata['pos'] = pos
-        graph.edata['rel_pos'] = pos[v] - pos[u]
-        return graph 

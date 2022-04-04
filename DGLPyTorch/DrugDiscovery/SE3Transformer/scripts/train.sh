@@ -3,8 +3,8 @@
 # CLI args with defaults
 BATCH_SIZE=${1:-25}
 AMP=${2:-true}
-NUM_EPOCHS=${3:-100}
-LEARNING_RATE=${4:-1e-3}
+NUM_EPOCHS=${3:-30}
+LEARNING_RATE=${4:-2e-3}
 WEIGHT_DECAY=${5:-0.1}
 
 python -m se3_transformer.runtime.training \
@@ -12,6 +12,8 @@ python -m se3_transformer.runtime.training \
   --batch_size "$BATCH_SIZE" \
   --epochs "$NUM_EPOCHS" \
   --lr "$LEARNING_RATE" \
+  --gamma 0.5 \
+  --cutoff 4.6 \
   --weight_decay "$WEIGHT_DECAY" \
   --use_layer_norm \
   --norm \

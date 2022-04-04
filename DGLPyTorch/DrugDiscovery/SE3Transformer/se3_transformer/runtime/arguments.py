@@ -45,7 +45,7 @@ paths.add_argument('--load_ckpt_path', type=pathlib.Path, default=None,
 optimizer = PARSER.add_argument_group('Optimizer')
 optimizer.add_argument('--optimizer', choices=['adam', 'sgd', 'lamb'], default='adam')
 optimizer.add_argument('--learning_rate', '--lr', dest='learning_rate', type=float, default=0.002)
-optimizer.add_argument('--min_learning_rate', '--min_lr', dest='min_learning_rate', type=float, default=None)
+optimizer.add_argument('--gamma', type=float, default=1.0)
 optimizer.add_argument('--momentum', type=float, default=0.9)
 optimizer.add_argument('--weight_decay', type=float, default=0.1)
 

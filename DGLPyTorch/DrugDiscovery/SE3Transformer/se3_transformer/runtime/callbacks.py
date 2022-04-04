@@ -72,10 +72,10 @@ class ANI1xMetricCallback(BaseCallback):
         self.best_rmse = float('inf')
 
     def on_validation_step(self, inputs, targets, preds):
-        if self.prefix == 'energy validation':
+        if self.prefix == 'energy':
             pred = preds[0]
             target = targets['energy']
-        elif self.prefix == 'forces validation':
+        elif self.prefix == 'forces':
             pred = preds[1]
             target = targets['forces']
         self.rmse(pred.detach(), target.detach())
@@ -124,13 +124,11 @@ class LRSchedulerCallback(BaseCallback):
 
 
 class ANI1xLRSchedulerCallback(LRSchedulerCallback):
-    def __init__(self, logger, epochs):
+    def __init__(self, logger):
         super().__init__(logger)
-        self.epochs = epochs
 
     def get_scheduler(self, optimizer, args):
-        min_lr = args.min_learning_rate if args.min_learning_rate else args.learning_rate / 10.0
-        return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, self.epochs, eta_min=min_lr)
+        return torch.optim.lr_scheduler.ExponentialLR(optimizer, args.gamma)
 
 
 class PerformanceCallback(BaseCallback):

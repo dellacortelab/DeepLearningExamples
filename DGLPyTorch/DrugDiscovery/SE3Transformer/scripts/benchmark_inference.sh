@@ -8,8 +8,8 @@ AMP=${2:-true}
 CUDA_VISIBLE_DEVICES=0 python -m se3_transformer.runtime.inference \
   --amp "$AMP" \
   --batch_size "$BATCH_SIZE" \
+  --cutoff 4.6 \
   --use_layer_norm \
   --norm \
-  --task homo \
   --seed 42 \
   --benchmark

@@ -54,5 +54,3 @@ ADD . .
 
 ENV DGLBACKEND=pytorch
 ENV OMP_NUM_THREADS=1
-
-

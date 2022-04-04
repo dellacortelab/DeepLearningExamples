@@ -228,6 +228,7 @@ class SE3TransformerPooled(nn.Module):
         parser.add_argument('--num_channels', help='Number of channels for the hidden features', type=int, default=32)
         return parent_parser
 
+
 class SE3TransformerANI1x(nn.Module):
     def __init__(self,
                  fiber_in: Fiber,
@@ -238,37 +239,43 @@ class SE3TransformerANI1x(nn.Module):
                  output_dim: int,
                  **kwargs):
         super().__init__()
-        self.transformer = SE3TransformerPooled(
+        kwargs['pooling'] = kwargs['pooling'] or 'max'
+        self.transformer = SE3Transformer(
             fiber_in=fiber_in,
+            fiber_hidden=Fiber.create(num_degrees, num_channels),
             fiber_out=fiber_out,
             fiber_edge=fiber_edge,
-            num_degrees=num_degrees,
-            num_channels=num_channels,
-            output_dim=output_dim,
+            return_type=0,
             **kwargs
+        )
+
+        n_out_features = fiber_out.num_features
+        self.mlp = nn.Sequential(
+            nn.Linear(n_out_features, n_out_features),
+            nn.ReLU(),
+            nn.Linear(n_out_features, output_dim)
         )
 
     def forward(self, inputs, forces=True, create_graph=True):
         graph, node_feats, *basis = inputs
         if forces==True:
             graph.ndata['pos'].requires_grad = True
-            graph.edata['rel_pos'] = self._get_relative_pos(graph) # recalculate so gradients go through the pos.
-            gp = self.transformer.transformer
-            basis = get_basis(graph.edata['rel_pos'], max_degree=gp.max_degree, compute_gradients=True,
-                                       use_pad_trick=gp.tensor_cores and not gp.low_memory,
-                                       amp=torch.is_autocast_enabled())
- 
-        energies = self.transformer(graph, node_feats, None, basis).squeeze(-1)
+            graph.edata['rel_pos'] = self._get_relative_pos(graph) # Calculate here so gradients go through the pos.
+            tr = self.transformer
+            basis = get_basis(graph.edata['rel_pos'], max_degree=tr.max_degree, compute_gradients=True,
+                                       use_pad_trick=tr.tensor_cores and not tr.low_memory,
+                                       amp=torch.is_autocast_enabled()
+            )
 
+        feats = self.transformer(graph, node_feats, None, basis).squeeze(-1)
+        energies = self.mlp(feats).squeeze(-1) 
         if not forces:
             return energies
-
         forces = -torch.autograd.grad(torch.sum(energies),
                                       graph.ndata['pos'],
                                       create_graph=create_graph,
-                                     )[0]
+        )[0]
         return energies, forces
-
 
     @staticmethod
     def _get_relative_pos(graph: DGLGraph) -> Tensor:

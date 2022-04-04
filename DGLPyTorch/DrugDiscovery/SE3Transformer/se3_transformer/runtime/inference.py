@@ -36,12 +36,10 @@ from se3_transformer.runtime.loggers import DLLogger, WandbLogger, LoggerCollect
 from se3_transformer.runtime.utils import to_cuda, get_local_rank
 
 
-#@torch.inference_mode() # Prevents force calculations
 def evaluate(model: nn.Module,
              dataloader: DataLoader,
              callbacks: List[BaseCallback],
              args):
-    #model.eval() # Prevents forces calculations
     for i, batch in tqdm(enumerate(dataloader), total=len(dataloader), unit='batch', desc=f'Evaluation',
                          leave=False, disable=(args.silent or get_local_rank() != 0)):
         *inputs, target = to_cuda(batch)
@@ -50,17 +48,17 @@ def evaluate(model: nn.Module,
             callback.on_batch_start()
 
         with torch.cuda.amp.autocast(enabled=args.amp):
-            pred = model(inputs)
+            pred = model(inputs, create_graph=False)
 
             for callback in callbacks:
                 callback.on_validation_step(inputs, target, pred)
 
 
 if __name__ == '__main__':
-    from se3_transformer.runtime.callbacks import QM9MetricCallback, PerformanceCallback
+    from se3_transformer.runtime.callbacks import ANI1xMetricCallback, PerformanceCallback
     from se3_transformer.runtime.utils import init_distributed, seed_everything
-    from se3_transformer.model import SE3TransformerPooled, Fiber
-    from se3_transformer.data_loading import QM9DataModule
+    from se3_transformer.model import SE3TransformerANI1x, Fiber
+    from se3_transformer.data_loading import ANI1xDataModule
     import torch.distributed as dist
     import logging
     import sys
@@ -89,10 +87,10 @@ if __name__ == '__main__':
 
     loggers = [DLLogger(save_dir=args.log_dir, filename=args.dllogger_name)]
     if args.wandb:
-        loggers.append(WandbLogger(name=f'QM9({args.task})', save_dir=args.log_dir, project='se3-transformer'))
+        loggers.append(WandbLogger(name=f'ANI1x', save_dir=args.log_dir, project='se3-transformer'))
     logger = LoggerCollection(loggers)
-    datamodule = QM9DataModule(**vars(args))
-    model = SE3TransformerPooled(
+    datamodule = ANI1xDataModule(**vars(args))
+    model = SE3TransformerANI1x(
         fiber_in=Fiber({0: datamodule.NODE_FEATURE_DIM}),
         fiber_out=Fiber({0: args.num_degrees * args.num_channels}),
         fiber_edge=Fiber({0: datamodule.EDGE_FEATURE_DIM}),
@@ -100,7 +98,8 @@ if __name__ == '__main__':
         tensor_cores=(args.amp and major_cc >= 7) or major_cc >= 8,  # use Tensor Cores more effectively
         **vars(args)
     )
-    callbacks = [QM9MetricCallback(logger, targets_std=datamodule.targets_std, prefix='test')]
+    callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy'),
+                 ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='forces')]
 
     model.to(device=torch.cuda.current_device())
     if args.load_ckpt_path is not None:

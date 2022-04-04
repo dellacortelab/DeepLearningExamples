@@ -59,10 +59,11 @@ class AttentionSE3(nn.Module):
         self.cutoff = cutoff
 
     @staticmethod
-    def bump_function(rel_pos, cutoff=float('inf')):
+    def cutoff_function(rel_pos, cutoff=float('inf')):
         dist = torch.norm(rel_pos, p=2, dim=1)
         bump = torch.zeros_like(dist)
-        bump[dist<cutoff] = torch.exp(1-1/(1-(dist[dist<cutoff]/cutoff)**2))
+        f = lambda x : 0.5*torch.cos(np.pi*x) + 0.5
+        bump[dist<cutoff] = f(dist[dist<cutoff]/cutoff)
         return bump[:,None]
 
     def forward(
@@ -90,7 +91,7 @@ class AttentionSE3(nn.Module):
                 edge_weights = dgl.ops.e_dot_v(graph, key, query).squeeze(-1)
                 edge_weights = edge_weights / np.sqrt(self.key_fiber.num_features)
                 edge_weights = edge_softmax(graph, edge_weights)
-                edge_weights = edge_weights * self.bump_function(graph.edata['rel_pos'], self.cutoff) 
+                edge_weights = edge_weights * self.cutoff_function(graph.edata['rel_pos'], self.cutoff) 
                 edge_weights = edge_weights[..., None, None]
 
             with nvtx_range('weighted sum'):

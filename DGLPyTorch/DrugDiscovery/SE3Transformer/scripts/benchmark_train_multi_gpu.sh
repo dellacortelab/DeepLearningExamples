@@ -10,10 +10,9 @@ python -m torch.distributed.run --nnodes=1 --nproc_per_node=gpu --max_restarts 0
   --amp "$AMP" \
   --batch_size "$BATCH_SIZE" \
   --epochs 6 \
+  --cutoff 4.6 \
   --use_layer_norm \
   --norm \
-  --save_ckpt_path model_qm9.pth \
-  --task homo \
-  --precompute_bases \
+  --save_ckpt_path model_ani1x.pth \
   --seed 42 \
   --benchmark
