@@ -233,8 +233,8 @@ if __name__ == '__main__':
         world_size = dist.get_world_size() if dist.is_initialized() else 1
         callbacks = [PerformanceCallback(logger, args.batch_size * world_size)]
     else:
-        callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy'),
-                     ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='forces'),
+        callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy validation'),
+                     ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='forces validation'),
                      ANI1xLRSchedulerCallback(logger)]
 
     if is_distributed:

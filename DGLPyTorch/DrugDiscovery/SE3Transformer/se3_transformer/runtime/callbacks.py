@@ -72,10 +72,10 @@ class ANI1xMetricCallback(BaseCallback):
         self.best_rmse = float('inf')
 
     def on_validation_step(self, inputs, targets, preds):
-        if self.prefix == 'energy':
+        if 'energy' in self.prefix:
             pred = preds[0]
             target = targets['energy']
-        elif self.prefix == 'forces':
+        elif 'forces' in self.prefix:
             pred = preds[1]
             target = targets['forces']
         self.rmse(pred.detach(), target.detach())

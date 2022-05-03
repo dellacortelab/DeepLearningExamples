@@ -215,6 +215,7 @@ class ANI1xDataset(Dataset):
         self.forces_list = forces_list
         self.cutoff = cutoff
         self.normalize = normalize
+        self.test = test
 
         eye = torch.eye(4)
         self.species_dict = {1: eye[0], 6: eye[1], 7: eye[2], 8: eye[3]}
