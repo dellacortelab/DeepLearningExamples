@@ -179,10 +179,6 @@ class SE3Transformer(nn.Module):
                             help='If true, will use fused ops that are slower but that use less memory '
                                  '(expect 25 percent less memory). '
                                  'Only has an effect if AMP is enabled on Volta GPUs, or if running on Ampere GPUs')
-        parser.add_argument('--num_channels', type=int, default=32,
-                            help='Number of hidden channels in model')
-        parser.add_argument('--num_degrees', type=int, default=3,
-                            help='Number of degrees in model')
         return parser
 
 
@@ -237,6 +233,8 @@ class SE3TransformerANI1x(nn.Module):
                  num_degrees: int,
                  num_channels: int,
                  output_dim: int,
+                 cutoff: float,
+                 num_basis_fns: int,
                  **kwargs):
         super().__init__()
         kwargs['pooling'] = kwargs['pooling'] or 'max'
@@ -246,8 +244,11 @@ class SE3TransformerANI1x(nn.Module):
             fiber_out=fiber_out,
             fiber_edge=fiber_edge,
             return_type=0,
+            cutoff=cutoff,
             **kwargs
         )
+        self.cutoff = cutoff
+        self.num_basis_fns = num_basis_fns
 
         n_out_features = fiber_out.num_features
         self.mlp = nn.Sequential(
@@ -266,15 +267,16 @@ class SE3TransformerANI1x(nn.Module):
                                        use_pad_trick=tr.tensor_cores and not tr.low_memory,
                                        amp=torch.is_autocast_enabled()
             )
-
-        feats = self.transformer(graph, node_feats, None, basis).squeeze(-1)
+        radial_basis = self._get_radial_basis(graph, self.cutoff, self.num_basis_fns)
+        edge_feats = {'0': radial_basis[:,:,None]}
+        feats = self.transformer(graph, node_feats, edge_feats, basis).squeeze(-1)
         energies = self.mlp(feats).squeeze(-1) 
         if not forces:
             return energies
         forces = -torch.autograd.grad(torch.sum(energies),
                                       graph.ndata['pos'],
                                       create_graph=create_graph,
-        )[0]
+                                     )[0]
         return energies, forces
 
     @staticmethod
@@ -285,11 +287,21 @@ class SE3TransformerANI1x(nn.Module):
         return rel_pos
 
     @staticmethod
+    def _get_radial_basis(graph, cutoff, num_basis_fns) -> Tensor:
+        rel_pos = graph.edata['rel_pos']
+        edge_dists = torch.norm(rel_pos, dim=1)
+        gaussian_centers = torch.linspace(0, cutoff, num_basis_fns, device=rel_pos.device)
+        dx = gaussian_centers[1] - gaussian_centers[0]
+        diffs = edge_dists[:,None] - gaussian_centers[None,:]
+        return torch.exp(-2 * diffs**2 / dx**2)
+
+    @staticmethod
     def add_argparse_args(parent_parser):
         parser = parent_parser.add_argument_group("Model architecture")
         SE3Transformer.add_argparse_args(parser)
         parser.add_argument('--num_degrees',
                             help='Number of degrees to use. Hidden features will have types [0, ..., num_degrees - 1]',
                             type=int, default=4)
-        parser.add_argument('--num_channels', help='Number of channels for the hidden features', type=int, default=32)
+        parser.add_argument('--num_channels', help='Number of channels for the hidden features', type=int, default=32) 
+        parser.add_argument('--num_basis_fns', help='Number of radial basis functions', type=int, default=16)
         return parent_parser
