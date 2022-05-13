@@ -244,7 +244,6 @@ class SE3TransformerANI1x(nn.Module):
             fiber_out=fiber_out,
             fiber_edge=fiber_edge,
             return_type=0,
-            cutoff=cutoff,
             **kwargs
         )
         self.cutoff = cutoff
@@ -298,10 +297,6 @@ class SE3TransformerANI1x(nn.Module):
     @staticmethod
     def add_argparse_args(parent_parser):
         parser = parent_parser.add_argument_group("Model architecture")
-        SE3Transformer.add_argparse_args(parser)
-        parser.add_argument('--num_degrees',
-                            help='Number of degrees to use. Hidden features will have types [0, ..., num_degrees - 1]',
-                            type=int, default=4)
-        parser.add_argument('--num_channels', help='Number of channels for the hidden features', type=int, default=32) 
+        SE3TransformerPooled.add_argparse_args(parser)
         parser.add_argument('--num_basis_fns', help='Number of radial basis functions', type=int, default=16)
         return parent_parser
