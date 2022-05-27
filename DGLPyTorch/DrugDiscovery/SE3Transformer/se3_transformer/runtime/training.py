@@ -92,7 +92,7 @@ def train_epoch(model, train_dataloader, loss_fn, epoch_idx, grad_scaler, optimi
             callback.on_batch_start()
 
         with torch.cuda.amp.autocast(enabled=args.amp):
-            pred = model(inputs)
+            pred = model(*inputs, create_graph=True)
             energy_loss, forces_loss = loss_fn(pred, target)
             energy_loss /= args.accumulate_grad_batches
             forces_loss /= args.accumulate_grad_batches
@@ -133,14 +133,15 @@ def train(model: nn.Module,
 
     model.train()
     grad_scaler = torch.cuda.amp.GradScaler(enabled=args.amp)
+    parameters = add_weight_decay(model, args.weight_decay, skip_list = ['mlp.15.weight','model.15.bias'])
     if args.optimizer == 'adam':
-        optimizer = FusedAdam(model.parameters(), lr=args.learning_rate, betas=(args.momentum, 0.999),
+        optimizer = FusedAdam(parameters, lr=args.learning_rate, betas=(args.momentum, 0.999),
                               weight_decay=args.weight_decay)
     elif args.optimizer == 'lamb':
-        optimizer = FusedLAMB(model.parameters(), lr=args.learning_rate, betas=(args.momentum, 0.999),
+        optimizer = FusedLAMB(parameters, lr=args.learning_rate, betas=(args.momentum, 0.999),
                               weight_decay=args.weight_decay)
     else:
-        optimizer = torch.optim.SGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum,
+        optimizer = torch.optim.SGD(parameters, lr=args.learning_rate, momentum=args.momentum,
                                     weight_decay=args.weight_decay)
 
     epoch_start = load_state(model, optimizer, args.load_ckpt_path, callbacks) if args.load_ckpt_path else 0
@@ -191,6 +192,21 @@ def train(model: nn.Module,
     for callback in callbacks:
         callback.on_fit_end()
 
+# https://discuss.pytorch.org/t/weight-decay-in-the-optimizers-is-a-bad-idea-especially-with-batchnorm/16994/3
+def add_weight_decay(model, weight_decay, skip_list=()):
+    decay = []
+    no_decay = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if len(param.shape) == 1 or name in skip_list:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+    return [
+        {'params': no_decay, 'weight_decay': 0.},
+        {'params': decay, 'weight_decay': weight_decay}]
+
 
 def print_parameters_count(model):
     num_params_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -219,13 +235,18 @@ if __name__ == '__main__':
 
     datamodule = ANI1xDataModule(**vars(args))
     model = SE3TransformerANI1x(
-        fiber_in=Fiber({0: datamodule.NODE_FEATURE_DIM}),
-        fiber_out=Fiber({0: args.num_degrees * args.num_channels}),
-        fiber_edge=Fiber({0: args.num_basis_fns}),
-        output_dim=1,
+        num_species = datamodule.NUM_SPECIES,
+        num_layers = args.num_layers,
+        num_degrees = args.num_degrees,
+        num_channels = args.num_channels,
+        num_basis_fns = args.num_basis_fns,
+        num_heads = args.num_heads,
+        channels_div = args.channels_div,
+        cutoff = args.cutoff,
+        norm = args.norm,
+        layer_norm = args.use_layer_norm,
         tensor_cores=using_tensor_cores(args.amp),  # use Tensor Cores more effectively,
-        cutoff=args.cutoff,
-        **vars(args)
+        low_memory=args.low_memory,
     )
     loss_fn = datamodule.loss_fn
 

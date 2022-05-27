@@ -61,10 +61,10 @@ class AttentionSE3(nn.Module):
     @staticmethod
     def cutoff_function(rel_pos, cutoff=float('inf')):
         dist = torch.norm(rel_pos, p=2, dim=1)
-        bump = torch.zeros_like(dist)
-        f = lambda x : 0.5*torch.cos(np.pi*x) + 0.5
-        bump[dist<cutoff] = f(dist[dist<cutoff]/cutoff)
-        return bump[:,None]
+        weight = torch.zeros_like(dist)
+        bump = lambda x : torch.exp(1-1/(1-x**2)) # Modified bump function
+        weight[dist<cutoff] = bump(dist[dist<cutoff]/cutoff)
+        return weight[:,None]
 
     def forward(
             self,

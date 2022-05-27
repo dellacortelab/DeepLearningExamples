@@ -28,6 +28,7 @@ import torch
 import torch.nn as nn
 from dgl import DGLGraph
 from torch import Tensor
+from dgl.nn.pytorch import SumPooling
 
 from se3_transformer.model.basis import get_basis, update_basis_with_fused
 from se3_transformer.model.layers.attention import AttentionBlockSE3
@@ -67,14 +68,14 @@ class SE3Transformer(nn.Module):
                  fiber_out: Fiber,
                  num_heads: int,
                  channels_div: int,
+                 cutoff: float = float('inf'),
                  fiber_edge: Fiber = Fiber({}),
                  return_type: Optional[int] = None,
-                 pooling: Optional[Literal['avg', 'max', 'sum']] = None,
+                 pooling: Optional[Literal['avg', 'max']] = None,
                  norm: bool = True,
                  use_layer_norm: bool = True,
                  tensor_cores: bool = False,
                  low_memory: bool = False,
-                 cutoff: float = float('inf'),
                  **kwargs):
         """
         :param num_layers:          Number of attention layers
@@ -85,7 +86,7 @@ class SE3Transformer(nn.Module):
         :param num_heads:           Number of attention heads
         :param channels_div:        Channels division before feeding to attention layer
         :param return_type:         Return only features of this type
-        :param pooling:             'avg', 'max', 'sum' graph pooling before MLP layers
+        :param pooling:             'avg' or  'max' graph pooling before MLP layers
         :param norm:                Apply a normalization layer after each attention block
         :param use_layer_norm:      Apply layer normalization between MLP layers
         :param tensor_cores:        True if using Tensor Cores (affects the use of fully fused convs, and padded bases)
@@ -227,49 +228,81 @@ class SE3TransformerPooled(nn.Module):
 
 class SE3TransformerANI1x(nn.Module):
     def __init__(self,
-                 fiber_in: Fiber,
-                 fiber_out: Fiber,
-                 fiber_edge: Fiber,
+                 num_species: int, 
+                 num_layers: int,
                  num_degrees: int,
                  num_channels: int,
-                 output_dim: int,
-                 cutoff: float,
                  num_basis_fns: int,
+                 num_heads: int,
+                 channels_div: int,
+                 cutoff: float = float('inf'), 
+                 norm: bool = True,
+                 use_layer_norm: bool = True,
+                 tensor_cores: bool = False,
+                 low_memory: bool = False,
                  **kwargs):
         super().__init__()
-        kwargs['pooling'] = kwargs['pooling'] or 'max'
         self.transformer = SE3Transformer(
-            fiber_in=fiber_in,
+            num_layers=num_layers,
+            fiber_in=Fiber.create(1, num_channels),
             fiber_hidden=Fiber.create(num_degrees, num_channels),
-            fiber_out=fiber_out,
-            fiber_edge=fiber_edge,
+            fiber_out=Fiber.create(1, num_degrees*num_channels), # TODO: check if this increases memory consumption
+            fiber_edge=Fiber.create(1, num_basis_fns),
+            num_heads=num_heads,
+            channels_div=channels_div,
             return_type=0,
+            norm=norm,
+            cutoff=cutoff,
+            use_layer_norm=use_layer_norm,
+            tensor_cores=tensor_cores,
+            low_memory=low_memory,
             **kwargs
         )
+
         self.cutoff = cutoff
         self.num_basis_fns = num_basis_fns
-
-        n_out_features = fiber_out.num_features
+        
+        self.embedding = nn.Embedding(num_species, num_channels)
+        n_out_features = num_degrees*num_channels
         self.mlp = nn.Sequential(
             nn.Linear(n_out_features, n_out_features),
+            nn.LayerNorm(n_out_features) if use_layer_norm else None, 
             nn.ReLU(),
-            nn.Linear(n_out_features, output_dim)
+            nn.Linear(n_out_features, n_out_features),
+            nn.LayerNorm(n_out_features) if use_layer_norm else None, 
+            nn.ReLU(),
+            nn.Linear(n_out_features, n_out_features),
+            nn.LayerNorm(n_out_features) if use_layer_norm else None, 
+            nn.ReLU(),
+            nn.Linear(n_out_features, n_out_features),
+            nn.LayerNorm(n_out_features) if use_layer_norm else None, 
+            nn.ReLU(),
+            nn.Linear(n_out_features, n_out_features),
+            nn.LayerNorm(n_out_features) if use_layer_norm else None, 
+            nn.ReLU(),
+            nn.Linear(n_out_features, 1)
         )
+        self.pooling_module = SumPooling()
 
-    def forward(self, inputs, forces=True, create_graph=True):
-        graph, node_feats, *basis = inputs
-        if forces==True:
-            graph.ndata['pos'].requires_grad = True
-            graph.edata['rel_pos'] = self._get_relative_pos(graph) # Calculate here so gradients go through the pos.
+    def forward(self, graph, forces=True, create_graph=False):
+        graph.ndata['pos'].requires_grad = forces
+        graph.edata['rel_pos'] = self._get_relative_pos(graph) # Calculate here so gradients go through the pos.
+        if forces: # Calculate basis and require gradients
             tr = self.transformer
             basis = get_basis(graph.edata['rel_pos'], max_degree=tr.max_degree, compute_gradients=True,
                                        use_pad_trick=tr.tensor_cores and not tr.low_memory,
                                        amp=torch.is_autocast_enabled()
             )
+
+        species_embedding = self.embedding(graph.ndata['species'])
+        node_feats = {'0': species_embedding.unsqueeze(-1)}
         radial_basis = self._get_radial_basis(graph, self.cutoff, self.num_basis_fns)
-        edge_feats = {'0': radial_basis[:,:,None]}
+        edge_feats = {'0': radial_basis.unsqueeze(-1)}
+
         feats = self.transformer(graph, node_feats, edge_feats, basis).squeeze(-1)
-        energies = self.mlp(feats).squeeze(-1) 
+        atom_energies = self.mlp(feats).squeeze(-1)
+        energies = self.pooling_module(graph, atom_energies)
+
         if not forces:
             return energies
         forces = -torch.autograd.grad(torch.sum(energies),
@@ -297,6 +330,10 @@ class SE3TransformerANI1x(nn.Module):
     @staticmethod
     def add_argparse_args(parent_parser):
         parser = parent_parser.add_argument_group("Model architecture")
-        SE3TransformerPooled.add_argparse_args(parser)
+        SE3Transformer.add_argparse_args(parser)
         parser.add_argument('--num_basis_fns', help='Number of radial basis functions', type=int, default=16)
+        parser.add_argument('--num_degrees',
+                            help='Number of degrees to use. Hidden features will have types [0, ..., num_degrees - 1]',
+                            type=int, default=3)
+        parser.add_argument('--num_channels', help='Number of channels for the hidden features', type=int, default=16) 
         return parent_parser

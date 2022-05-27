@@ -48,7 +48,7 @@ def evaluate(model: nn.Module,
             callback.on_batch_start()
 
         with torch.cuda.amp.autocast(enabled=args.amp):
-            pred = model(inputs, create_graph=False)
+            pred = model(*inputs, create_graph=False)
 
             for callback in callbacks:
                 callback.on_validation_step(inputs, target, pred)
@@ -91,15 +91,20 @@ if __name__ == '__main__':
     logger = LoggerCollection(loggers)
     datamodule = ANI1xDataModule(**vars(args))
     model = SE3TransformerANI1x(
-        fiber_in=Fiber({0: datamodule.NODE_FEATURE_DIM}),
-        fiber_out=Fiber({0: args.num_degrees * args.num_channels}),
-        fiber_edge=Fiber({0: args.num_basis_fns}),
-        output_dim=1,
+        num_species = datamodule.NUM_SPECIES,
+        num_layers = args.num_layers,
+        num_degrees = args.num_degrees,
+        num_channels = args.num_channels,
+        num_basis_fns = args.num_basis_fns,
+        num_heads = args.num_heads,
+        channels_div = args.channels_div,
+        norm = args.norm,
+        layer_norm = args.use_layer_norm,
         tensor_cores=(args.amp and major_cc >= 7) or major_cc >= 8,  # use Tensor Cores more effectively
-        **vars(args)
+        low_memory=args.low_memory,
     )
-    callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy'),
-                 ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='forces')]
+    callbacks = [ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='energy test'),
+                 ANI1xMetricCallback(logger, targets_std=datamodule.ENERGY_STD, prefix='forces test')]
 
     model.to(device=torch.cuda.current_device())
     if args.load_ckpt_path is not None:

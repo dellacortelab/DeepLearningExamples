@@ -5,34 +5,31 @@ from dgl import DGLGraph
 import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import random_split, DataLoader, Dataset
-from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 import h5py
 import os
 import numpy as np
+from collections import Counter
 
 from se3_transformer.data_loading.data_module import DataModule
 from se3_transformer.model.basis import get_basis
 from se3_transformer.runtime.utils import get_local_rank, str2bool, using_tensor_cores
 
-SI_ENERGIES = torch.tensor([
-            -0.600952980000,
-            -38.08316124000,
-            -54.70775770000,
-            -75.19446356000])
-ENERGY_MEAN = 0.0184
-ENERGY_STD = 0.1062
-FORCES_STD = 0.0709 # Not used
+ATOM_ENERGIES = torch.tensor([
+                             -0.600952980000,
+                             -38.08316124000,
+                             -54.70775770000,
+                             -75.19446356000])
 
-NODE_FEATURE_DIM = 4
-EDGE_FEATURE_DIM = 0
+ENERGY_STD = 0.1062
+
+ENERGY_STD = 1.643134
+NUM_SPECIES = 4
 
 
 
 class ANI1xDataModule(DataModule):
-    NODE_FEATURE_DIM = NODE_FEATURE_DIM
-    EDGE_FEATURE_DIM = EDGE_FEATURE_DIM
-
+    NUM_SPECIES = NUM_SPECIES
     ENERGY_STD = ENERGY_STD
     def __init__(self,
                  data_dir: pathlib.Path,
@@ -172,12 +169,8 @@ class ANI1xDataModule(DataModule):
            
 
     def _collate(self, samples):
-        graphs, node_feats_list, targets_list, *bases = map(list, zip(*samples))
+        graphs, targets_list = map(list, zip(*samples))
         batched_graph = dgl.batch(graphs)
-
-        # node features
-        species = torch.cat([node_feats['0'] for node_feats in node_feats_list])
-        node_feats = {'0': species}
 
         # targets
         energy = torch.tensor([targets['energy'] for targets in targets_list])
@@ -185,7 +178,7 @@ class ANI1xDataModule(DataModule):
         targets = {'energy': energy,
                    'forces': forces}
 
-        return batched_graph, node_feats, targets
+        return batched_graph, targets
 
     @staticmethod
     def add_argparse_args(parent_parser):
@@ -217,14 +210,11 @@ class ANI1xDataset(Dataset):
         self.normalize = normalize
         self.test = test
 
-        eye = torch.eye(4)
-        self.species_dict = {1: eye[0], 6: eye[1], 7: eye[2], 8: eye[3]}
-        self.test_species_dict = {b'H': eye[0], b'C': eye[1], b'N':eye[2], b'O':eye[3]}
+        self.species_dict = {1: 0, 6: 1, 7: 2, 8: 3}
+        self.test_species_dict = {b'H': 1, b'C': 2, b'N': 3, b'O': 4}
 
-        self.si_energies = SI_ENERGIES
-        self.energy_mean = ENERGY_MEAN
+        self.atom_energies = ATOM_ENERGIES
         self.energy_std = ENERGY_STD
-        self.forces_std = FORCES_STD
 
     def __len__(self):
         return len(self.pos_list)
@@ -241,38 +231,29 @@ class ANI1xDataset(Dataset):
 
         # Create node features
         if self.test:
-            species = torch.stack([self.test_species_dict[atom] for atom in species])
+            species = torch.tensor([self.test_species_dict[atom] for atom in species])
         else:
-            species = torch.stack([self.species_dict[atom] for atom in species]) 
-        node_feats = {'0': species.unsqueeze(-1)}
+            species = torch.tensor([self.species_dict[atom] for atom in species]) 
+        graph.ndata['species'] = species
 
         # Create targets
         if self.normalize:
-            adjustment = torch.sum(species @ self.si_energies)
-            energy = energy - adjustment
-            energy = (energy-self.energy_mean) / self.energy_std
+            counter = Counter(species.numpy())
+            counts = torch.tensor([counter[i] for i in range(NUM_SPECIES)], dtype=torch.float)
+            adjustment = counts @ self.atom_energies
+            energy = (energy - adjustment) / self.energy_std
             forces = forces / self.energy_std
         forces = torch.tensor(forces)
         targets = {'energy': energy,
                    'forces': forces}
 
-        return graph, node_feats, targets
+        return graph, targets
 
     @staticmethod
     def _create_graph(pos, cutoff=float('inf')):
-        u = []
-        v = []
-        
-        dist_mat = torch.norm(pos[:,None,:]-pos[None,:,:], p=2, dim=2)
-        N = len(pos)
-        for i in range(N):
-            for j in range(N):
-                if i==j:
-                    continue
-                elif dist_mat[i,j] < cutoff:
-                    u.append(i)
-                    v.append(j)
-
-        graph = dgl.graph((u,v))
+        dist_mat = torch.cdist(pos[None,...], pos[None,...]).squeeze(0)
+        adj_mat = (dist_mat < cutoff).fill_diagonal_(False)
+        u, v = torch.nonzero(adj_mat, as_tuple=True)
+        graph = dgl.graph((u,v), num_nodes=len(pos))
         graph.ndata['pos'] = pos
         return graph

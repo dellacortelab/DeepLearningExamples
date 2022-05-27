@@ -25,7 +25,7 @@ from typing import Dict, Literal
 
 import torch.nn as nn
 from dgl import DGLGraph
-from dgl.nn.pytorch import AvgPooling, MaxPooling, SumPooling
+from dgl.nn.pytorch import AvgPooling, MaxPooling
 from torch import Tensor
 
 
@@ -37,21 +37,19 @@ class GPooling(nn.Module):
     If you want max-pooling for type > 0 features, look into Vector Neurons.
     """
 
-    def __init__(self, feat_type: int = 0, pool: Literal['max', 'avg', 'sum'] = 'sum'):
+    def __init__(self, feat_type: int = 0, pool: Literal['max', 'avg'] = 'max'):
         """
         :param feat_type: Feature type to pool
-        :param pool: Type of pooling: max, avg, or sum
+        :param pool: Type of pooling: max or avg
         """
         super().__init__()
-        assert pool in ['max', 'avg', 'sum'], f'Unknown pooling: {pool}'
+        assert pool in ['max', 'avg'], f'Unknown pooling: {pool}'
         assert feat_type == 0 or pool == 'avg' or pool=='sum', 'Max pooling on type > 0 features will break equivariance'
         self.feat_type = feat_type
         if pool == 'max':
             self.pool = MaxPooling()
         elif pool == 'avg':
             self.pool = AvgPooling()
-        elif pool == 'sum':
-            self.pool = SumPooling()
 
     def forward(self, features: Dict[str, Tensor], graph: DGLGraph, **kwargs) -> Tensor:
         pooled = self.pool(graph, features[str(self.feat_type)])
